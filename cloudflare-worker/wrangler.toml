@@ -1,0 +1,56 @@
+# StreamVessel log agent as a Cloudflare Worker. Copy, fill in SV_SERVER, then
+# set the three secrets (see README.md):
+#   wrangler secret put SV_CLIENT_ID
+#   wrangler secret put SV_CLIENT_SECRET
+#   wrangler secret put BULK_PASSWORD
+name = "streamvessel-log-worker"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+# sv-be origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
+SV_SERVER = "https://streamvessel.example.com"
+# Folder name for this Worker's files under the agent's prefix: [A-Za-z0-9._-]{1,63}.
+SV_INSTANCE = "cloudflare-worker"
+# Basic auth user to enter in the App Platform log destination.
+BULK_USER = "streamvessel"
+# Request caps: as sent, and after gzip/deflate is removed.
+MAX_BODY_BYTES = "10485760"
+MAX_DECOMPRESSED_BYTES = "33554432"
+# "true" logs every request's method, path and headers (Authorization redacted) to `wrangler tail`.
+DEBUG_LOG_REQUESTS = "false"
+
+[[queues.producers]]
+queue = "sv-logs"
+binding = "LOG_QUEUE"
+
+[[queues.consumers]]
+queue = "sv-logs"
+# One object per batch: up to 100 messages of < 120 KB each, so ~12 MB of lines at most.
+max_batch_size = 100
+max_batch_timeout = 60
+# The consumer sets its own delay on each retry: 30 s doubling to a 1 h cap, or
+# 1 h after a permanent refusal (invalid_client, agent_revoked). 100 attempts
+# therefore ride out an sv-be or bucket outage of about four days before a
+# batch moves to the dead-letter queue. retry_delay only applies if a batch
+# fails without the consumer choosing a delay (an uncaught exception).
+max_retries = 100
+retry_delay = 30
+dead_letter_queue = "sv-logs-dlq"
+
+# Per client IP, for all requests. App Platform sends from a few shared IPs,
+# so keep this generous.
+[[ratelimits]]
+name = "REQUEST_LIMITER"
+namespace_id = "7301"
+simple = { limit = 1200, period = 60 }
+
+# Per client IP, for failed Basic auth attempts only.
+[[ratelimits]]
+name = "AUTH_FAIL_LIMITER"
+namespace_id = "7302"
+simple = { limit = 10, period = 60 }
+
+[observability]
+enabled = true
