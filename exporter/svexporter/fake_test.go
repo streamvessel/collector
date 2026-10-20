@@ -143,10 +143,11 @@ func (f *fakeSV) authorized(w http.ResponseWriter, r *http.Request) bool {
 // sign returns a presigned target for key. size < 0 leaves size and checksum
 // unsigned, as for an offline slot.
 func (f *fakeSV) sign(key string, size int64, sha string) target {
-	h := map[string]string{"Content-Type": "application/gzip", "If-None-Match": "*"}
+	// sv-be sends lowercase keys and leaves out Host.
+	h := map[string]string{"content-type": "application/gzip", "if-none-match": "*"}
 	if size >= 0 {
 		raw, _ := hex.DecodeString(sha)
-		h["Content-Length"] = fmt.Sprint(size)
+		h["content-length"] = fmt.Sprint(size)
 		h["x-amz-checksum-sha256"] = base64.StdEncoding.EncodeToString(raw)
 	}
 	f.signed[key] = h

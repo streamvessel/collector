@@ -22,6 +22,9 @@ type uploadRequest struct {
 	EndTs    string `json:"endTs"`
 	Size     int64  `json:"size"`
 	SHA256   string `json:"sha256"`
+	// ContentMD5 is base64 of the raw MD5 digest; every provider but AWS
+	// signs Content-MD5, so it is always sent.
+	ContentMD5 string `json:"contentMd5"`
 }
 
 // target is a presigned PUT: the answer to /uploads and one slot of /leases.
@@ -49,6 +52,7 @@ type apiError struct {
 	op     string
 	status int    // HTTP status, 0 when sv-be did not answer
 	code   string // error code from the body or the token endpoint
+	desc   string // error_description, for the log
 	retry  time.Duration
 	err    error
 }
@@ -61,6 +65,9 @@ func (e *apiError) Error() string {
 	}
 	if e.code != "" {
 		fmt.Fprintf(&b, " %s", e.code)
+	}
+	if e.desc != "" {
+		fmt.Fprintf(&b, " (%s)", e.desc)
 	}
 	if e.err != nil {
 		fmt.Fprintf(&b, ": %v", e.err)
@@ -131,10 +138,12 @@ func (c *svClient) post(ctx context.Context, op string, in, out any) error {
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
+		code, desc := errorCode(data)
 		return &apiError{
 			op:     op,
 			status: resp.StatusCode,
-			code:   errorCode(data),
+			code:   code,
+			desc:   desc,
 			retry:  retryAfter(resp.Header.Get("Retry-After")),
 		}
 	}
@@ -149,7 +158,7 @@ func (c *svClient) post(ctx context.Context, op string, in, out any) error {
 func transportError(op string, err error) error {
 	var re *oauth2.RetrieveError
 	if errors.As(err, &re) {
-		ae := &apiError{op: "token", code: re.ErrorCode, err: err}
+		ae := &apiError{op: "token", code: re.ErrorCode, desc: re.ErrorDescription, err: err}
 		if re.Response != nil {
 			ae.status = re.Response.StatusCode
 			ae.retry = retryAfter(re.Response.Header.Get("Retry-After"))
@@ -162,19 +171,18 @@ func transportError(op string, err error) error {
 	return &apiError{op: op, err: err}
 }
 
-// errorCode reads {"error": "..."} or {"code": "..."} from an sv-be error body.
-func errorCode(body []byte) string {
+// errorCode reads {"error": "...", "error_description": "..."} from an
+// sv-be error body.
+func errorCode(body []byte) (code, desc string) {
 	var e struct {
-		Error any    `json:"error"`
-		Code  string `json:"code"`
+		Error       any    `json:"error"`
+		Description string `json:"error_description"`
 	}
 	if json.Unmarshal(body, &e) != nil {
-		return ""
+		return "", ""
 	}
-	if s, ok := e.Error.(string); ok && s != "" {
-		return s
-	}
-	return e.Code
+	code, _ = e.Error.(string)
+	return code, e.Description
 }
 
 func retryAfter(v string) time.Duration {

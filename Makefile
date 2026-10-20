@@ -4,7 +4,6 @@
 GO_VERSION   ?= 1.26.10
 OCB_VERSION  ?= 0.163.0
 export GOTOOLCHAIN = go$(GO_VERSION)
-export CGO_ENABLED = 0
 
 GOBIN        := $(shell go env GOPATH)/bin
 OCB          := $(GOBIN)/builder
@@ -28,7 +27,7 @@ check-generated: generate
 	git diff --exit-code -- $(DIST)
 
 build:
-	cd $(DIST) && go build -trimpath -ldflags "$(LDFLAGS)" -o ../../bin/sv-log-agent .
+	cd $(DIST) && CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o ../../bin/sv-log-agent .
 
 test:
 	cd exporter/svexporter && go test -race -count=1 ./...

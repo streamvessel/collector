@@ -200,6 +200,7 @@ func (s *server) uploads(w http.ResponseWriter, r *http.Request) {
 		EndTs    string `json:"endTs"`
 		Size     int64  `json:"size"`
 		SHA256   string `json:"sha256"`
+		MD5      string `json:"contentMd5"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
@@ -209,7 +210,7 @@ func (s *server) uploads(w http.ResponseWriter, r *http.Request) {
 	start, err1 := time.Parse(time.RFC3339Nano, req.StartTs)
 	end, err2 := time.Parse(time.RFC3339Nano, req.EndTs)
 	if !instanceRe.MatchString(req.Instance) || req.Instance == "." || req.Instance == ".." ||
-		err != nil || len(sum) != 32 || err1 != nil || err2 != nil || req.Size <= 0 {
+		err != nil || len(sum) != 32 || err1 != nil || err2 != nil || req.Size <= 0 || req.MD5 == "" {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
 		return
 	}
@@ -269,8 +270,8 @@ func (s *server) sign(ctx context.Context, key string, size *int64, checksum str
 	}
 	h := map[string]string{}
 	for k, v := range req.SignedHeader {
-		if !strings.EqualFold(k, "host") {
-			h[k] = strings.Join(v, ",")
+		if !strings.EqualFold(k, "host") { // like sv-be: lowercase keys, no Host
+			h[strings.ToLower(k)] = strings.Join(v, ",")
 		}
 	}
 	return &target{URL: req.URL, Headers: h, Key: key, ExpiresAt: time.Now().Add(ttl).UTC()}, nil

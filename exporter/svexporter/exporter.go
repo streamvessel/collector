@@ -152,11 +152,12 @@ func (e *svExporter) pushLogs(ctx context.Context, ld plog.Logs) error {
 
 func (e *svExporter) upload(ctx context.Context, b *batch) error {
 	req := uploadRequest{
-		Instance: e.instance,
-		StartTs:  formatTime(b.start),
-		EndTs:    formatTime(b.end),
-		Size:     int64(len(b.body)),
-		SHA256:   b.sha256,
+		Instance:   e.instance,
+		StartTs:    formatTime(b.start),
+		EndTs:      formatTime(b.end),
+		Size:       int64(len(b.body)),
+		SHA256:     b.sha256,
+		ContentMD5: b.md5,
 	}
 	for forbidden := 0; ; {
 		t, err := e.sv.presign(ctx, req)

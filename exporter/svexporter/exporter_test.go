@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -149,6 +151,8 @@ func TestUploadPutCarriesNoAuthorization(t *testing.T) {
 		assert.Equal(t, int64(len(body)), req.Size)
 		sum := sha256.Sum256(body)
 		assert.Equal(t, hex.EncodeToString(sum[:]), req.SHA256)
+		m := md5.Sum(body)
+		assert.Equal(t, base64.StdEncoding.EncodeToString(m[:]), req.ContentMD5)
 		assert.Len(t, gunzipLines(t, body), 3)
 	}
 }
@@ -205,9 +209,10 @@ func TestUploadsResponseTable(t *testing.T) {
 		body      any
 		permanent bool
 	}{
-		{"agent revoked", 403, map[string]string{"error": "agent_revoked"}, true},
+		{"agent revoked", 403, map[string]string{"error": "agent_revoked", "error_description": "agent was revoked"}, true},
 		{"scope changed", 403, map[string]string{"error": "scope_changed"}, true},
 		{"bad request", 400, map[string]string{"error": "invalid_instance"}, true},
+		{"content md5 required", 400, map[string]string{"error": "content_md5_required"}, true},
 		{"rate limited", 429, map[string]string{"error": "rate_limited"}, false},
 		{"server error", 503, nil, false},
 		{"unknown 403", 403, map[string]string{"error": "something_else"}, false},

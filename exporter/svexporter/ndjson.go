@@ -3,7 +3,9 @@ package svexporter // import "github.com/streamvessel/collector/exporter/svexpor
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/md5" //nolint:gosec // Content-MD5 is an integrity header, not security
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
@@ -44,6 +46,7 @@ var (
 type batch struct {
 	body    []byte // gzipped NDJSON
 	sha256  string // lowercase hex of body
+	md5     string // base64 of the raw MD5 of body, for Content-MD5
 	records int
 	start   time.Time
 	end     time.Time
@@ -90,6 +93,8 @@ func encodeBatch(ld plog.Logs, fallbackHost string, now time.Time) (*batch, erro
 	b.body = buf.Bytes()
 	sum := sha256.Sum256(b.body)
 	b.sha256 = hex.EncodeToString(sum[:])
+	m := md5.Sum(b.body) //nolint:gosec // see import
+	b.md5 = base64.StdEncoding.EncodeToString(m[:])
 	return b, nil
 }
 
