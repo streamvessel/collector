@@ -1,0 +1,5 @@
+*
+!exporter/svexporter
+!cmd/sv-log-agent
+!examples/agent.yaml
+!test/e2e/fakesvbe

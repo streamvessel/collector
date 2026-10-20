@@ -1,0 +1,53 @@
+# sv-log-agent as a sidecar: the app writes to a shared emptyDir and the agent
+# tails it. The instance is the workload name (from a label), never the pod
+# name, so every rollout keeps writing to the same folder. Mount the agent
+# config (examples/agent.yaml with the include path changed) as ConfigMap
+# sv-log-agent-sidecar; the Secret is the one from daemonset.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels: {app: web}
+  template:
+    metadata:
+      labels: {app: web}
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.29
+          command: ["/bin/sh", "-c", "rm -f /var/log/nginx/access.log && exec nginx -g 'daemon off;'"]
+          volumeMounts:
+            - {name: logs, mountPath: /var/log/nginx}
+        - name: sv-log-agent
+          image: ghcr.io/streamvessel/sv-log-agent:latest
+          env:
+            - name: SV_SERVER
+              value: https://app.streamvessel.com
+            - name: SV_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: sv-log-agent, key: client-id}
+            - name: SV_CLIENT_SECRET_FILE
+              value: /etc/sv-log-agent/secret/client-secret
+            - name: SV_INSTANCE
+              valueFrom:
+                fieldRef: {fieldPath: "metadata.labels['app']"}
+          securityContext:
+            runAsUser: 0
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - {name: logs, mountPath: /var/log/nginx, readOnly: true}
+            - {name: secret, mountPath: /etc/sv-log-agent/secret, readOnly: true}
+            - {name: state, mountPath: /var/lib/sv-log-agent}
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: state
+          emptyDir: {}   # use a PVC (StatefulSet) if queued batches must survive pod replacement
+        - name: secret
+          secret:
+            secretName: sv-log-agent
+            items: [{key: client-secret, path: client-secret}]

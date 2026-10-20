@@ -1,0 +1,120 @@
+# sv-log-agent as a DaemonSet: one agent per node tails /var/log/pods and
+# reports the node name as its instance (never the pod name, which changes on
+# every rollout and would start a new folder each time).
+#
+# Create the secret from a file, so it never appears in argv or a manifest:
+#   kubectl -n sv-log-agent create secret generic sv-log-agent \
+#     --from-literal=client-id=sva_… --from-file=client-secret=./secret.txt
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sv-log-agent
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sv-log-agent
+  namespace: sv-log-agent
+data:
+  agent.yaml: |
+    extensions:
+      oauth2client:
+        client_id: ${env:SV_CLIENT_ID}
+        client_secret_file: /etc/sv-log-agent/secret/client-secret
+        token_url: ${env:SV_SERVER}/be/ingest/oauth/token
+        timeout: 10s
+      file_storage:
+        directory: /var/lib/sv-log-agent
+        create_directory: true
+      health_check:
+        endpoint: ${env:POD_IP}:13133
+    receivers:
+      filelog:
+        include: [/var/log/pods/*/*/*.log]
+        exclude: [/var/log/pods/sv-log-agent_*/*/*.log]   # not its own logs
+        start_at: end
+        storage: file_storage
+        include_file_path: true
+        operators:
+          - type: container   # CRI/docker format; adds k8s.namespace.name, k8s.pod.name, …
+    processors:
+      memory_limiter:
+        check_interval: 1s
+        limit_percentage: 75
+        spike_limit_percentage: 20
+      resourcedetection:
+        detectors: [env]
+    exporters:
+      sv:
+        endpoint: ${env:SV_SERVER}/be/ingest
+        auth:
+          authenticator: oauth2client
+        instance: ${env:SV_INSTANCE}
+        sending_queue:
+          storage: file_storage
+    service:
+      extensions: [oauth2client, file_storage, health_check]
+      pipelines:
+        logs:
+          receivers: [filelog]
+          processors: [memory_limiter, resourcedetection]
+          exporters: [sv]
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: sv-log-agent
+  namespace: sv-log-agent
+spec:
+  selector:
+    matchLabels: {app: sv-log-agent}
+  template:
+    metadata:
+      labels: {app: sv-log-agent}
+    spec:
+      containers:
+        - name: agent
+          image: ghcr.io/streamvessel/sv-log-agent:latest
+          args: ["--config", "/etc/sv-log-agent/config/agent.yaml"]
+          env:
+            - name: SV_SERVER
+              value: https://app.streamvessel.com
+            - name: SV_CLIENT_ID
+              valueFrom:
+                secretKeyRef: {name: sv-log-agent, key: client-id}
+            - name: SV_INSTANCE
+              valueFrom:
+                fieldRef: {fieldPath: spec.nodeName}
+            - name: POD_IP
+              valueFrom:
+                fieldRef: {fieldPath: status.podIP}
+            - name: OTEL_RESOURCE_ATTRIBUTES
+              value: k8s.node.name=$(SV_INSTANCE)
+            - name: GOMEMLIMIT
+              value: 400MiB
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {memory: 512Mi}
+          securityContext:
+            runAsUser: 0   # /var/log/pods is root-only
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL], add: [DAC_READ_SEARCH]}
+          livenessProbe:
+            httpGet: {path: /, port: 13133}
+          volumeMounts:
+            - {name: config, mountPath: /etc/sv-log-agent/config, readOnly: true}
+            - {name: secret, mountPath: /etc/sv-log-agent/secret, readOnly: true}
+            - {name: pods, mountPath: /var/log/pods, readOnly: true}
+            - {name: state, mountPath: /var/lib/sv-log-agent}
+      volumes:
+        - name: config
+          configMap: {name: sv-log-agent}
+        - name: secret
+          secret:
+            secretName: sv-log-agent
+            items: [{key: client-secret, path: client-secret}]
+        - name: pods
+          hostPath: {path: /var/log/pods}
+        - name: state   # offsets and queue survive pod restarts on the node
+          hostPath: {path: /var/lib/sv-log-agent, type: DirectoryOrCreate}

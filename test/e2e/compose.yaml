@@ -1,0 +1,61 @@
+# Test stack: MiniStack (S3), a fake sv-be that presigns against it, the
+# agent built from this repo, and a log generator. run.sh drives it.
+#
+# sv-be and Postgres replace fakesvbe once sv-be (streamvessel/sv-be#385)
+# publishes an image; the agent side does not change.
+name: sv-agent-e2e
+
+services:
+  ministack:
+    image: ministackorg/ministack:1.5.30@sha256:9019a8ab2531163fc6c3119a277a181faadcd2cde8fd20272dc8ec0ccda154b9
+    environment:
+      SERVICES: s3
+
+  fakesvbe:
+    build:
+      context: ../..
+      dockerfile: test/e2e/fakesvbe/Dockerfile
+    environment:
+      S3_ENDPOINT: http://ministack:4566
+      CLIENT_ID: sva_e2e
+      TOKEN_TTL_SECONDS: "120"   # short, so the run exercises token refresh
+    secrets: [sv_client_secret]
+    depends_on: [ministack]
+
+  agent:
+    build:
+      context: ../..
+    environment:
+      SV_SERVER: http://fakesvbe:8080
+      SV_CLIENT_ID: sva_e2e
+    command: ["--config", "/etc/sv-log-agent/e2e.yaml"]
+    user: "0"   # reads the shared log volume
+    secrets: [sv_client_secret]
+    volumes:
+      - ./agent.yaml:/etc/sv-log-agent/e2e.yaml:ro
+      - logs:/logs:ro
+      - state:/var/lib/sv-log-agent
+    depends_on: [fakesvbe]
+
+  gen:
+    image: sv-agent-e2e-fakesvbe
+    entrypoint: ["/fakesvbe", "gen"]
+    user: "0"
+    volumes:
+      - logs:/logs
+    profiles: [tools]
+
+  verify:
+    image: sv-agent-e2e-fakesvbe
+    entrypoint: ["/fakesvbe", "verify"]
+    environment:
+      S3_ENDPOINT: http://ministack:4566
+    profiles: [tools]
+
+secrets:
+  sv_client_secret:
+    file: ./secret.txt
+
+volumes:
+  logs:
+  state:

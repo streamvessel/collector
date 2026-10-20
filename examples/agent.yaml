@@ -1,0 +1,92 @@
+# sv-log-agent: tail an nginx access log and ship it to your bucket through
+# StreamVessel.
+#
+# Environment:
+#   SV_SERVER              https://app.streamvessel.com (no trailing slash)
+#   SV_CLIENT_ID           the agent's client id (sva_…)
+#   SV_CLIENT_SECRET_FILE  path to a file holding the secret (svas_…); never
+#                          put the secret itself in the environment or argv
+#   SV_INSTANCE            optional; defaults to the host name
+#   SV_STORAGE_DIR         optional; read offsets and the persistent queue
+#                          (default /var/lib/sv-log-agent)
+
+extensions:
+  oauth2client:
+    client_id: ${env:SV_CLIENT_ID}
+    # Re-read on every token request, so a rotated secret needs no restart.
+    client_secret_file: ${env:SV_CLIENT_SECRET_FILE}
+    token_url: ${env:SV_SERVER}/be/ingest/oauth/token
+    timeout: 10s
+  file_storage:
+    directory: ${env:SV_STORAGE_DIR:-/var/lib/sv-log-agent}
+    create_directory: true
+  health_check:
+    endpoint: 127.0.0.1:13133
+
+receivers:
+  filelog/nginx:
+    include: [/var/log/nginx/access.log]
+    start_at: end
+    storage: file_storage           # read offsets survive restarts
+    include_file_path: true         # -> "file" in each record
+    operators:
+      # combined log format:
+      # 127.0.0.1 - - [20/Oct/2026:12:00:00 +0000] "GET / HTTP/1.1" 200 612 "-" "curl/8.0"
+      - type: regex_parser
+        regex: '^(?P<remote_addr>\S+) \S+ (?P<remote_user>\S+) \[(?P<time>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+) (?P<protocol>[^"]+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+|-) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)"'
+        timestamp:
+          parse_from: attributes.time
+          layout: '%d/%b/%Y:%H:%M:%S %z'
+        severity:
+          parse_from: attributes.status
+          mapping:
+            info: [2xx, 3xx]
+            warn: 4xx
+            error: 5xx
+      - type: remove
+        field: attributes.time
+  otlp:
+    protocols:
+      http:
+        endpoint: 127.0.0.1:4318
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  resourcedetection:
+    detectors: [env, system]
+    system:
+      hostname_sources: [os]
+
+exporters:
+  sv:
+    endpoint: ${env:SV_SERVER}/be/ingest
+    auth:
+      authenticator: oauth2client
+    instance: ${env:SV_INSTANCE:-}
+    sending_queue:
+      storage: file_storage         # batches survive restarts and outages
+      # Defaults, shown for reference: batch after persistence, 16 MB of
+      # uncompressed logs or 5 minutes, whichever comes first.
+      sizer: bytes
+      queue_size: 536870912
+      block_on_overflow: true
+      batch:
+        sizer: bytes
+        min_size: 16777216
+        max_size: 16777216
+        flush_timeout: 5m
+    retry_on_failure:
+      max_elapsed_time: 0           # retry until it lands; never drop
+    offline_slots:
+      pool_size: 8                  # 0 disables pre-minted upload slots
+
+service:
+  extensions: [oauth2client, file_storage, health_check]
+  pipelines:
+    logs:
+      receivers: [filelog/nginx, otlp]
+      processors: [memory_limiter, resourcedetection]   # no batch processor: batching is in the exporter's queue
+      exporters: [sv]

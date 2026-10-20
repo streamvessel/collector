@@ -1,0 +1,22 @@
+version: "2"
+linters:
+  enable:
+    - bodyclose
+    - errorlint
+    - gosec
+    - misspell
+    - noctx
+    - revive
+  settings:
+    gosec:
+      excludes:
+        - G304 # file paths come from the operator's config
+  exclusions:
+    presets: [comments, std-error-handling]
+    rules:
+      - path: _test\.go
+        linters: [gosec, noctx, bodyclose]
+      - path: test/e2e/
+        linters: [gosec]
+formatters:
+  enable: [gofmt, goimports]

@@ -1,0 +1,72 @@
+# Agent config for the Compose test: small batches and a short flush so a
+# kill lands mid-batch, and an offline slot pool to ride out an sv-be stop.
+extensions:
+  oauth2client:
+    client_id: ${env:SV_CLIENT_ID}
+    client_secret_file: /run/secrets/sv_client_secret
+    token_url: ${env:SV_SERVER}/be/ingest/oauth/token
+    timeout: 10s
+  file_storage:
+    directory: /var/lib/sv-log-agent
+    create_directory: true
+
+receivers:
+  filelog:
+    include: [/logs/app.log, /logs/app.log.1]
+    start_at: beginning
+    storage: file_storage
+    include_file_path: true
+    poll_interval: 100ms
+    operators:
+      - type: regex_parser
+        regex: '^(?P<remote_addr>\S+) \S+ (?P<remote_user>\S+) \[(?P<time>[^\]]+)\] "(?P<method>\S+) (?P<path>\S+) (?P<protocol>[^"]+)" (?P<status>\d{3}) (?P<body_bytes_sent>\d+|-) "(?P<referer>[^"]*)" "(?P<user_agent>[^"]*)"'
+        timestamp:
+          parse_from: attributes.time
+          layout: '%d/%b/%Y:%H:%M:%S %z'
+        severity:
+          parse_from: attributes.status
+          mapping:
+            info: [2xx, 3xx]
+            warn: 4xx
+            error: 5xx
+      - type: remove
+        field: attributes.time
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 20
+  resourcedetection:
+    detectors: [env, system]
+
+exporters:
+  sv:
+    endpoint: ${env:SV_SERVER}/be/ingest
+    auth:
+      authenticator: oauth2client
+    instance: e2e-agent
+    sending_queue:
+      storage: file_storage
+      batch:
+        min_size: 262144
+        max_size: 524288
+        flush_timeout: 3s
+    retry_on_failure:
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 0
+    offline_slots:
+      pool_size: 8
+      check_interval: 5s
+
+service:
+  telemetry:
+    logs:
+      level: info
+  extensions: [oauth2client, file_storage]
+  pipelines:
+    logs:
+      receivers: [filelog]
+      processors: [memory_limiter, resourcedetection]
+      exporters: [sv]

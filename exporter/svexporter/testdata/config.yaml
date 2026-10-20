@@ -1,0 +1,26 @@
+sv:
+  endpoint: https://sv.example/be/ingest
+  auth:
+    authenticator: oauth2client
+  instance: node-a
+  sending_queue:
+    storage: file_storage
+sv/custom:
+  endpoint: https://sv.example/be/ingest
+  auth:
+    authenticator: oauth2client
+  offline_slots:
+    pool_size: 0
+  sending_queue:
+    storage: file_storage
+    batch:
+      flush_timeout: 10s
+      min_size: 1048576
+      max_size: 1048576
+sv/bad_instance:
+  endpoint: https://sv.example/be/ingest
+  auth:
+    authenticator: oauth2client
+  instance: my/pod
+sv/no_auth:
+  endpoint: https://sv.example/be/ingest
