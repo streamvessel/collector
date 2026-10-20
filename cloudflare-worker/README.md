@@ -78,7 +78,7 @@ object therefore holds at most about 12 MB of uncompressed lines.
    `grant_type=client_credentials`, client id and secret as HTTP Basic. The
    token is cached per isolate until 60 s before `expires_in` runs out.
 3. Calls `POST {SV_SERVER}/be/ingest/uploads` with
-   `{instance, startTs, endTs, size, sha256}` and gets
+   `{instance, startTs, endTs, size, sha256, contentMd5}` and gets
    `{url, headers, key, expiresAt}`. On a 401 it gets a new token, once.
 4. `PUT url` with exactly the returned headers and **no `Authorization`
    header**, even if one were listed. The bucket would refuse it, and it
@@ -93,9 +93,16 @@ object therefore holds at most about 12 MB of uncompressed lines.
 | 429, 408, 5xx, network error; PUT 400/409/501/5xx; PUT 403 three times | **Transient.** Retries the batch after 30 s × 2^(attempt−1), capped at 1 h, or after `Retry-After` if that is longer. |
 | A message that is not a non-empty string (nothing this Worker produces) | Acked and logged as `malformed_message_dropped`. |
 
-The `sha256` sent to `/ingest/uploads` is lowercase hex. `startTs`/`endTs`
-are RFC 3339 strings. Both are this Worker's reading of sv-be#385, which
-does not fix the encodings yet.
+The upload request follows sv-be's `docs/design-notes/log-ingest.md`
+(streamvessel/sv-be#386):
+
+- `sha256` is the lowercase hex SHA-256 of the gzip bytes.
+- `contentMd5` is the base64 of their raw MD5 digest (`crypto.subtle.digest("MD5")`).
+  It is always sent: providers other than AWS sign `Content-MD5` and
+  answer 400 `content_md5_required` without it.
+- `startTs` and `endTs` are ISO-8601 instants (UTC, milliseconds).
+- The PUT carries exactly the `headers` sv-be returns (lowercase, no Host).
+  On AWS that set includes `if-none-match: *`.
 
 ## Delivery semantics
 
@@ -237,7 +244,7 @@ redacted), plus a per-request item count. It never prints document contents.
 | `SV_CLIENT_SECRET` | secret | — | agent client secret (`svas_…`) |
 | `BULK_PASSWORD` | secret | — | Basic auth password, ≥ 16 chars |
 | `BULK_USER` | var | `streamvessel` | Basic auth user; unset to accept any user |
-| `SV_INSTANCE` | var | `cloudflare-worker` | instance folder, `[A-Za-z0-9._-]{1,63}` |
+| `SV_INSTANCE` | var | `cf-worker` | instance folder, `[A-Za-z0-9._-]{1,63}` |
 | `MAX_BODY_BYTES` | var | 10485760 | body cap as sent |
 | `MAX_DECOMPRESSED_BYTES` | var | 33554432 | body cap after decompression |
 | `DEBUG_LOG_REQUESTS` | var | `false` | log request summaries to `wrangler tail` |
@@ -265,7 +272,8 @@ The tests cover:
   queue, which enforces Cloudflare's limits;
 - gzip handling and both caps, including a gzip bomb;
 - the consumer's token cache and 401 refresh, the presign request, the PUT
-  checks (no Authorization, size, checksum, `If-None-Match`), and 412/403
+  checks (no Authorization, size, SHA-256 or Content-MD5 checksum,
+  `If-None-Match`), and 412/403
   handling;
 - backoff and `Retry-After`, and `invalid_client` / `agent_revoked` as
   permanent.

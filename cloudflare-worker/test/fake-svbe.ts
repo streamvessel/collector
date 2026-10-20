@@ -11,13 +11,19 @@ export interface StoredObject {
 
 export interface UploadCall {
 	auth: string | null;
-	body: { instance: string; startTs: string; endTs: string; size: number; sha256: string };
+	body: { instance: string; startTs: string; endTs: string; size: number; sha256: string; contentMd5?: string };
 }
+
+/**
+ * sv-be's ProviderCapabilities: AWS signs x-amz-checksum-sha256 and
+ * If-None-Match; everything else signs Content-MD5 and no conditional write.
+ */
+export type Provider = "aws" | "other";
 
 type Override = (req: Request) => Response | Promise<Response> | undefined;
 
-async function sha256Base64(data: Uint8Array): Promise<string> {
-	const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+async function digestBase64(alg: "SHA-256" | "MD5", data: Uint8Array): Promise<string> {
+	const digest = new Uint8Array(await crypto.subtle.digest(alg, data));
 	return btoa(String.fromCharCode(...digest));
 }
 
@@ -26,6 +32,7 @@ export class FakeSvBe {
 	readonly bucket = "https://bucket.test";
 	clientId = "sva_testclient";
 	clientSecret = "svas_testsecret";
+	provider: Provider = "aws";
 
 	tokenCalls: Array<{ auth: string | null; body: string }> = [];
 	uploadCalls: UploadCall[] = [];
@@ -74,16 +81,25 @@ export class FakeSvBe {
 		if (custom) return custom;
 		const token = req.headers.get("authorization")?.replace(/^Bearer /, "");
 		if (!token || !this.issuedTokens.has(token)) return Response.json({ error: "invalid_token" }, { status: 401 });
-		const hexToB64 = btoa(String.fromCharCode(...body.sha256.match(/../g)!.map((h) => parseInt(h, 16))));
-		const key = `logs/agent1/${body.instance}/${body.startTs.slice(0, 10).replaceAll("-", "")}/${body.sha256.slice(0, 8)}-${++this.seq}.log.gz`;
+		if (!/^[0-9a-f]{64}$/.test(body.sha256) || Number.isNaN(Date.parse(body.startTs)) || Number.isNaN(Date.parse(body.endTs))) {
+			return Response.json({ error: "invalid_request", error_description: "bad sha256 or timestamps" }, { status: 400 });
+		}
+		// Lowercase header names, Host excluded, as sv-be returns what the SDK signed.
+		const headers: Record<string, string> = { "content-length": String(body.size), "content-type": "application/x-ndjson" };
+		if (this.provider === "aws") {
+			headers["x-amz-checksum-sha256"] = btoa(String.fromCharCode(...body.sha256.match(/../g)!.map((h) => parseInt(h, 16))));
+			headers["if-none-match"] = "*";
+		} else {
+			if (!body.contentMd5) {
+				return Response.json({ error: "content_md5_required", error_description: "send contentMd5" }, { status: 400 });
+			}
+			headers["content-md5"] = body.contentMd5;
+		}
+		// Same batch, same key (the key carries start, end and sha8), as on sv-be.
+		const key = `logs/agent1/${body.instance}/${body.startTs.slice(0, 10).replaceAll("-", "")}/${body.startTs}_${body.endTs}_${body.sha256.slice(0, 8)}.log.gz`;
 		return Response.json({
 			url: `${this.bucket}/${key}?X-Amz-Signature=fake`,
-			headers: {
-				"Content-Length": String(body.size),
-				"Content-Type": "application/x-ndjson",
-				"x-amz-checksum-sha256": hexToB64,
-				"If-None-Match": "*",
-			},
+			headers,
 			key,
 			expiresAt: new Date(Date.now() + 300_000).toISOString(),
 		});
@@ -97,7 +113,13 @@ export class FakeSvBe {
 		if (custom) return custom;
 		if (req.headers.has("authorization")) return new Response("<Error><Code>InvalidArgument</Code></Error>", { status: 400 });
 		const data = new Uint8Array(await req.arrayBuffer());
-		if (headers["x-amz-checksum-sha256"] !== (await sha256Base64(data))) {
+		if (headers["content-length"] !== String(data.byteLength)) {
+			return new Response("<Error><Code>IncompleteBody</Code></Error>", { status: 400 });
+		}
+		const sha = headers["x-amz-checksum-sha256"];
+		const md5 = headers["content-md5"];
+		if (!sha && !md5) return new Response("<Error><Code>MissingIntegrity</Code></Error>", { status: 400 });
+		if ((sha && sha !== (await digestBase64("SHA-256", data))) || (md5 && md5 !== (await digestBase64("MD5", data)))) {
 			return new Response("<Error><Code>BadDigest</Code></Error>", { status: 400 });
 		}
 		const key = new URL(req.url).pathname.slice(1);

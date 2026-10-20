@@ -31,7 +31,7 @@ export interface Env {
 	AUTH_FAIL_LIMITER?: RateLimit;
 }
 
-export const DEFAULT_INSTANCE = "cloudflare-worker";
+export const DEFAULT_INSTANCE = "cf-worker";
 export const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
 export const DEFAULT_MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024;
 export const MIN_PASSWORD_LENGTH = 16;

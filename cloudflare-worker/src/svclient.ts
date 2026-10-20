@@ -29,6 +29,7 @@ export interface UploadRequest {
 	endTs: string;
 	size: number;
 	sha256: string;
+	contentMd5: string;
 }
 
 export interface UploadTarget {

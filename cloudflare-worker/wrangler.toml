@@ -12,7 +12,7 @@ workers_dev = true
 # sv-be origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
 SV_SERVER = "https://streamvessel.example.com"
 # Folder name for this Worker's files under the agent's prefix: [A-Za-z0-9._-]{1,63}.
-SV_INSTANCE = "cloudflare-worker"
+SV_INSTANCE = "cf-worker"
 # Basic auth user to enter in the App Platform log destination.
 BULK_USER = "streamvessel"
 # Request caps: as sent, and after gzip/deflate is removed.

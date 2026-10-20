@@ -24,6 +24,8 @@ const LINE_TS_RE = /^\{"timestamp":"([^"]+)"/;
 export interface PreparedUpload {
 	gzip: Uint8Array;
 	sha256: string;
+	/** Base64 of the raw MD5 digest; sv-be needs it for providers that verify Content-MD5. */
+	contentMd5: string;
 	startTs: string;
 	endTs: string;
 }
@@ -37,7 +39,7 @@ function hex(buf: ArrayBuffer): string {
 	return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Joins the messages' lines, gzips and hashes them, and finds the time window. */
+/** Joins the messages' lines, gzips and hashes them (SHA-256 and MD5), and finds the time window. */
 export async function prepareUpload(bodies: QueueBody[], fallbackTs: number): Promise<PreparedUpload> {
 	let min = Infinity;
 	let max = -Infinity;
@@ -54,8 +56,10 @@ export async function prepareUpload(bodies: QueueBody[], fallbackTs: number): Pr
 	}
 	if (!Number.isFinite(min)) min = max = fallbackTs;
 	const data = await gzip(bodies.join(""));
-	const sha256 = hex(await crypto.subtle.digest("SHA-256", data));
-	return { gzip: data, sha256, startTs: new Date(min).toISOString(), endTs: new Date(max).toISOString() };
+	const [sha, md5] = await Promise.all([crypto.subtle.digest("SHA-256", data), crypto.subtle.digest("MD5", data)]);
+	const sha256 = hex(sha);
+	const contentMd5 = btoa(String.fromCharCode(...new Uint8Array(md5)));
+	return { gzip: data, sha256, contentMd5, startTs: new Date(min).toISOString(), endTs: new Date(max).toISOString() };
 }
 
 function backoffSeconds(attempts: number, retryAfter?: number): number {
@@ -114,6 +118,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 			endTs: upload.endTs,
 			size: upload.gzip.byteLength,
 			sha256: upload.sha256,
+			contentMd5: upload.contentMd5,
 		};
 		for (let refusals = 0; ; ) {
 			const target = await requestUpload(cfg, request);

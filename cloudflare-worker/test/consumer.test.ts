@@ -93,6 +93,30 @@ describe("queue consumer", () => {
 		expect(await gunzipText(obj.body)).toBe(bodies.join(""));
 	});
 
+	it("sends contentMd5 and PUTs with Content-MD5 for a non-AWS provider", async () => {
+		sv.provider = "other";
+		const result = await run([line("2026-10-20T12:00:00.000Z", "x")]);
+		expect(result.explicitAcks).toEqual(["m0"]);
+		const up = sv.uploadCalls[0].body;
+		expect(up.contentMd5).toMatch(/^[A-Za-z0-9+/]{22}==$/);
+		expect(sv.putCalls[0].headers["content-md5"]).toBe(up.contentMd5);
+		expect(sv.putCalls[0].headers["if-none-match"]).toBeUndefined();
+		expect(sv.objects.size).toBe(1);
+	});
+
+	it("computes MD5 with crypto.subtle in the Workers runtime", async () => {
+		// RFC 1321 test vector
+		const digest = new Uint8Array(await crypto.subtle.digest("MD5", new TextEncoder().encode("abc")));
+		expect([...digest].map((b) => b.toString(16).padStart(2, "0")).join("")).toBe("900150983cd24fb0d6963f7d28e17f72");
+	});
+
+	it("treats 400 content_md5_required as permanent", async () => {
+		sv.onUpload = () => Response.json({ error: "content_md5_required" }, { status: 400 });
+		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
+		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("content_md5_required"));
+	});
+
 	it("never forwards an Authorization header even if sv-be lists one", async () => {
 		sv.onUpload = undefined;
 		const orig = sv.fetch;
