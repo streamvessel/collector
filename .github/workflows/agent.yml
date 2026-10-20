@@ -57,9 +57,11 @@ jobs:
       - name: Generated distribution matches builder-config.yaml
         run: make check-generated
       - name: Build twice and compare (reproducible)
+        # The checksum lives outside the checkout: an untracked file would set
+        # vcs.modified in the second binary and change its hash.
         run: |
-          make build && sha256sum bin/sv-log-agent | tee first.sha
-          go clean -cache && make build && sha256sum -c first.sha
+          make build && sha256sum bin/sv-log-agent | tee "$RUNNER_TEMP/first.sha"
+          go clean -cache && make build && sha256sum -c "$RUNNER_TEMP/first.sha"
       - name: Example config validates
         run: |
           echo placeholder > "$RUNNER_TEMP/secret"
