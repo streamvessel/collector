@@ -27,6 +27,7 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - README.md
+      - LICENSE
       - examples/agent.yaml
       - packaging/sv-log-agent.service
       - packaging/agent.env
@@ -38,6 +39,7 @@ nfpms:
     homepage: https://github.com/streamvessel/collector
     maintainer: StreamVessel <support@streamvessel.com>
     description: StreamVessel log agent (OpenTelemetry Collector distribution)
+    license: Apache-2.0
     formats: [deb, rpm]
     bindir: /usr/bin
     contents:
@@ -63,6 +65,7 @@ dockers_v2:
     extra_files: [examples/agent.yaml]
     labels:
       org.opencontainers.image.source: https://github.com/streamvessel/collector
+      org.opencontainers.image.licenses: Apache-2.0
       org.opencontainers.image.version: "{{ .Version }}"
       org.opencontainers.image.revision: "{{ .FullCommit }}"
       org.opencontainers.image.created: "{{ .CommitDate }}"

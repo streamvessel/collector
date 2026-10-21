@@ -89,3 +89,7 @@ make e2e               # Compose: SIGKILL mid-batch + sv-be outage, every line m
 Releases (`v*` tags) run goreleaser: static Linux amd64/arm64 archives, deb/rpm packages with the systemd unit, and the image `ghcr.io/streamvessel/sv-log-agent`.
 
 The Compose test runs against `test/e2e/fakesvbe`, a stand-in for sv-be's ingest API that presigns real S3 PUTs against MiniStack, until sv-be (streamvessel/sv-be#385) publishes an image.
+
+### License
+
+This repository is licensed under the [Apache License 2.0](LICENSE), the same license as the OpenTelemetry Collector the agent is built from.
