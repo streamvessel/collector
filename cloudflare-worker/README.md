@@ -1,5 +1,7 @@
 # StreamVessel log Worker for Cloudflare
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/streamvessel/collector/tree/main/cloudflare-worker)
+
 Send your DigitalOcean App Platform logs to your own bucket, with no extra App
 Platform component.
 
@@ -44,68 +46,70 @@ You need:
   shown only once.
 - **A Cloudflare account** with Workers and Queues. Use the Workers Paid plan
   for real traffic.
-- **Node.js 22 or newer** on the machine you deploy from.
+- **A GitHub or GitLab account** for the one-click deploy, or **Node.js 22 or
+  newer** to deploy by hand.
 
 ## Set up
 
-### 1. Get the code and log in to Cloudflare
+### 1. Deploy the Worker
+
+Pick one way.
+
+**One click (recommended).** Press the button:
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/streamvessel/collector/tree/main/cloudflare-worker)
+
+Cloudflare then:
+
+1. asks you to log in, and copies this Worker into a new repository in your
+   GitHub or GitLab account;
+2. creates the two queues, `sv-logs` and `sv-logs-dlq`;
+3. asks for three secrets:
+
+   | Secret | Value |
+   |---|---|
+   | `SV_CLIENT_ID` | the agent's client id (`sva_…`) |
+   | `SV_CLIENT_SECRET` | the agent's secret (`svas_…`) |
+   | `BULK_PASSWORD` | a new password for App Platform to use; at least 16 characters, for example from `openssl rand -base64 32` |
+
+4. deploys, and shows your Worker's address, for example
+   `https://streamvessel-log-worker.<your-account>.workers.dev`.
+
+Keep the `BULK_PASSWORD`; you need it in step 2. Every commit to your copied
+repository redeploys the Worker. To pick up a newer version of this Worker,
+copy the changes from `streamvessel/collector` into your repository.
+
+**By hand.** With Node.js 22 or newer:
 
 ```sh
 git clone https://github.com/streamvessel/collector.git
 cd collector/cloudflare-worker
 npm ci
 npx wrangler login
-```
-
-### 2. Create the two queues
-
-```sh
 npx wrangler queues create sv-logs
 npx wrangler queues create sv-logs-dlq
-```
-
-`sv-logs` holds logs waiting to be uploaded. `sv-logs-dlq` keeps batches that
-could not be uploaded after many retries, so nothing is silently lost.
-
-### 3. Set the StreamVessel address
-
-In `wrangler.toml`, set `SV_SERVER` to your StreamVessel address (just the
-origin, without `/be` or a trailing slash):
-
-```toml
-SV_SERVER = "https://app.streamvessel.example"
-```
-
-### 4. Add the secrets
-
-```sh
 npx wrangler secret put SV_CLIENT_ID       # paste the client id (sva_…)
 npx wrangler secret put SV_CLIENT_SECRET   # paste the secret (svas_…)
 npx wrangler secret put BULK_PASSWORD      # a new password for App Platform to use
-```
-
-For `BULK_PASSWORD`, use a long random value (at least 16 characters), for
-example from `openssl rand -base64 32`. Keep it; you need it in step 6.
-
-### 5. Deploy
-
-```sh
 npx wrangler deploy
 ```
 
-This prints your Worker's address, for example
-`https://streamvessel-log-worker.<your-account>.workers.dev`.
+`wrangler deploy` prints your Worker's address.
 
-### 6. Point App Platform at the Worker
+Either way, the Worker talks to `https://app.streamvessel.com`. If you run your
+own StreamVessel, change `SV_SERVER` in `wrangler.toml` (just the origin,
+without `/be`) and deploy again.
+
+### 2. Point App Platform at the Worker
 
 In the DigitalOcean control panel, open your app, then **Settings → Log
 Forwarding → Add Destination**, and choose **OpenSearch**:
 
 | Field | Value |
 |---|---|
-| Endpoint | your Worker's address from step 5 |
+| Endpoint | your Worker's address from step 1 |
 | User | `streamvessel` |
-| Password | the `BULK_PASSWORD` from step 4 |
+| Password | the `BULK_PASSWORD` from step 1 |
 | Index name | anything, for example `logs` |
 
 Or add it to the app spec of each component whose logs you want:
@@ -203,7 +207,9 @@ In **Workers Logs**, set up an alert on `upload_refused_permanently`. In the
 ### Rotate the secret
 
 1. Add a second secret to the agent in StreamVessel.
-2. `npx wrangler secret put SV_CLIENT_SECRET` with the new secret.
+2. Put the new secret in `SV_CLIENT_SECRET` (Cloudflare dashboard → your
+   Worker → **Settings → Variables and Secrets**, or
+   `npx wrangler secret put SV_CLIENT_SECRET`).
 3. Delete the old secret in StreamVessel.
 
 There is no downtime.
@@ -211,7 +217,8 @@ There is no downtime.
 ### Recover from the dead-letter queue
 
 Fix the cause first (for example, update the secret). Then add this block to
-`wrangler.toml` and deploy:
+`wrangler.toml` and deploy (with the one-click setup, commit it to your copied
+repository):
 
 ```toml
 [[queues.consumers]]
@@ -229,12 +236,14 @@ When the `sv-logs-dlq` backlog reaches 0, remove the block and deploy again.
 
 ## Settings
 
-Change these in `wrangler.toml` (variables) or with `wrangler secret put`
-(secrets), then run `npx wrangler deploy`.
+Change variables in `wrangler.toml` and deploy again (with the one-click setup,
+commit the change to your copied repository). Change secrets in the Cloudflare
+dashboard (your Worker → **Settings → Variables and Secrets**) or with
+`npx wrangler secret put`.
 
 | Name | Type | Default | What it does |
 |---|---|---|---|
-| `SV_SERVER` | variable | — | Your StreamVessel address |
+| `SV_SERVER` | variable | `https://app.streamvessel.com` | Your StreamVessel address |
 | `SV_CLIENT_ID` | secret | — | Agent client id (`sva_…`) |
 | `SV_CLIENT_SECRET` | secret | — | Agent secret (`svas_…`) |
 | `BULK_PASSWORD` | secret | — | Password App Platform uses; at least 16 characters |

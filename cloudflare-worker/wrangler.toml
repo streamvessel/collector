@@ -1,5 +1,6 @@
-# StreamVessel log agent as a Cloudflare Worker. Copy, fill in SV_SERVER, then
-# set the three secrets (see README.md):
+# StreamVessel log agent as a Cloudflare Worker. Deploy with the "Deploy to
+# Cloudflare" button in README.md, or by hand after setting the three secrets
+# listed in .dev.vars.example:
 #   wrangler secret put SV_CLIENT_ID
 #   wrangler secret put SV_CLIENT_SECRET
 #   wrangler secret put BULK_PASSWORD
@@ -9,8 +10,8 @@ compatibility_date = "2026-10-01"
 workers_dev = true
 
 [vars]
-# sv-be origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
-SV_SERVER = "https://streamvessel.example.com"
+# StreamVessel origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
+SV_SERVER = "https://app.streamvessel.com"
 # Folder name for this Worker's files under the agent's prefix: [A-Za-z0-9._-]{1,63}.
 SV_INSTANCE = "cf-worker"
 # Basic auth user to enter in the App Platform log destination.
@@ -26,6 +27,12 @@ DEBUG_LOG_REQUESTS = "false"
 [[queues.producers]]
 queue = "sv-logs"
 binding = "LOG_QUEUE"
+
+# Not used by the code. Declared as a binding so that the "Deploy to
+# Cloudflare" flow creates the dead-letter queue along with sv-logs.
+[[queues.producers]]
+queue = "sv-logs-dlq"
+binding = "DEAD_LETTER_QUEUE"
 
 [[queues.consumers]]
 queue = "sv-logs"

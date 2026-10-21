@@ -17,5 +17,33 @@
     "typescript": "^5.9.3",
     "vitest": "~4.1.0",
     "wrangler": "^4.151.3"
+  },
+  "cloudflare": {
+    "bindings": {
+      "SV_CLIENT_ID": {
+        "description": "Client id of your StreamVessel log agent (`sva_…`). Create the agent in StreamVessel first."
+      },
+      "SV_CLIENT_SECRET": {
+        "description": "Secret of that log agent (`svas_…`). StreamVessel shows it only once."
+      },
+      "BULK_PASSWORD": {
+        "description": "A new password that App Platform will use to send logs here. At least 16 characters; for example the output of `openssl rand -base64 32`. You need it again when you set up log forwarding."
+      },
+      "SV_SERVER": {
+        "description": "Your StreamVessel address. Keep the default unless you run your own StreamVessel."
+      },
+      "SV_INSTANCE": {
+        "description": "Folder name for this Worker's files in your bucket. Letters, digits, `.`, `_` and `-`."
+      },
+      "BULK_USER": {
+        "description": "User name App Platform will use to send logs here."
+      },
+      "LOG_QUEUE": {
+        "description": "Queue that holds logs until they are uploaded."
+      },
+      "DEAD_LETTER_QUEUE": {
+        "description": "Queue that keeps batches that could not be uploaded after many retries."
+      }
+    }
   }
 }
