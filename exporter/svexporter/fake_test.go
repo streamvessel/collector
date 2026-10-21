@@ -156,6 +156,17 @@ func (f *fakeSV) handlePut(w http.ResponseWriter, r *http.Request) {
 	defer f.mu.Unlock()
 	body, _ := io.ReadAll(r.Body)
 	f.puts = append(f.puts, r)
+	// Every PUT, to an upload URL or an offline slot: our own unsigned
+	// Content-Type, no Content-Encoding, and never the bearer token.
+	if got := r.Header.Get("Content-Type"); got != "application/gzip" {
+		f.t.Errorf("PUT %s: Content-Type %q, want application/gzip", r.URL.Path, got)
+	}
+	if got := r.Header.Get("Content-Encoding"); got != "" {
+		f.t.Errorf("PUT %s: unexpected Content-Encoding %q", r.URL.Path, got)
+	}
+	if got := r.Header.Get("Authorization"); got != "" {
+		f.t.Errorf("PUT %s: carries Authorization %q", r.URL.Path, got)
+	}
 	key := strings.TrimPrefix(r.URL.Path, "/bucket/")
 	if r.Method != http.MethodPut || r.URL.Query().Get("X-Amz-Signature") == "" {
 		w.WriteHeader(http.StatusBadRequest)

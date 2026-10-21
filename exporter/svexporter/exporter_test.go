@@ -305,6 +305,8 @@ func TestOfflineSlotWhenSVBeUnavailable(t *testing.T) {
 		assert.Contains(t, k, "lease_")
 	}
 	assert.Empty(t, f.puts[0].Header.Get("Authorization"))
+	assert.Equal(t, "application/gzip", f.puts[0].Header.Get("Content-Type"))
+	assert.Equal(t, "*", f.puts[0].Header.Get("If-None-Match"), "the slot's presigned header is sent too")
 }
 
 func TestOfflineSlotWhenSVBeDown(t *testing.T) {
