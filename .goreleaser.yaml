@@ -1,0 +1,77 @@
+# goreleaser v2: static Linux binaries, deb/rpm with the systemd unit, and
+# the multi-arch image ghcr.io/streamvessel/sv-log-agent.
+version: 2
+
+project_name: sv-log-agent
+
+before:
+  hooks:
+    # The committed distribution must match builder-config.yaml.
+    - make check-generated
+
+builds:
+  - id: sv-log-agent
+    dir: cmd/sv-log-agent
+    binary: sv-log-agent
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags: ["-s -w -buildid="]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+      - examples/agent.yaml
+      - packaging/sv-log-agent.service
+      - packaging/agent.env
+
+nfpms:
+  - id: packages
+    package_name: sv-log-agent
+    vendor: StreamVessel
+    homepage: https://github.com/streamvessel/collector
+    maintainer: StreamVessel <support@streamvessel.com>
+    description: StreamVessel log agent (OpenTelemetry Collector distribution)
+    license: Apache-2.0
+    formats: [deb, rpm]
+    bindir: /usr/bin
+    contents:
+      - src: packaging/sv-log-agent.service
+        dst: /lib/systemd/system/sv-log-agent.service
+      - src: examples/agent.yaml
+        dst: /etc/sv-log-agent/agent.yaml
+        type: config|noreplace
+      - src: packaging/agent.env
+        dst: /etc/sv-log-agent/agent.env
+        type: config|noreplace
+        file_info:
+          mode: 0640
+
+dockers_v2:
+  - id: image
+    images: [ghcr.io/streamvessel/sv-log-agent]
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    dockerfile: Dockerfile.release
+    platforms: [linux/amd64, linux/arm64]
+    extra_files: [examples/agent.yaml]
+    labels:
+      org.opencontainers.image.source: https://github.com/streamvessel/collector
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github

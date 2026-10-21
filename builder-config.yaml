@@ -1,0 +1,33 @@
+# ocb (OpenTelemetry Collector Builder) manifest for sv-log-agent.
+# Every component is pinned to one collector release; bump them together
+# (make bump OTEL_VERSION=… OTEL_STABLE_VERSION=…) and commit the regenerated
+# cmd/sv-log-agent, which CI checks is up to date.
+dist:
+  module: github.com/streamvessel/collector/cmd/sv-log-agent
+  name: sv-log-agent
+  description: StreamVessel log agent
+  version: 0.1.0-dev
+  output_path: ./cmd/sv-log-agent
+
+receivers:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/receiver/filelogreceiver v0.163.0
+  - gomod: go.opentelemetry.io/collector/receiver/otlpreceiver v0.163.0
+
+processors:
+  - gomod: go.opentelemetry.io/collector/processor/memorylimiterprocessor v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor v0.163.0
+
+exporters:
+  - gomod: github.com/streamvessel/collector/exporter/svexporter v0.0.0
+    path: ./exporter/svexporter
+  - gomod: go.opentelemetry.io/collector/exporter/debugexporter v0.163.0
+
+extensions:
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/oauth2clientauthextension v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/storage/filestorage v0.163.0
+  - gomod: github.com/open-telemetry/opentelemetry-collector-contrib/extension/healthcheckextension v0.163.0
+
+providers:
+  - gomod: go.opentelemetry.io/collector/confmap/provider/envprovider v1.69.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/fileprovider v1.69.0
+  - gomod: go.opentelemetry.io/collector/confmap/provider/yamlprovider v1.69.0

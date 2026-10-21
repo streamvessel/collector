@@ -1,0 +1,26 @@
+[Unit]
+Description=StreamVessel log agent
+Documentation=https://github.com/streamvessel/collector
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# /etc/sv-log-agent/agent.env sets SV_SERVER, SV_CLIENT_ID and
+# SV_CLIENT_SECRET_FILE (a path; the secret itself stays in that file).
+EnvironmentFile=/etc/sv-log-agent/agent.env
+Environment=SV_STORAGE_DIR=/var/lib/sv-log-agent
+ExecStart=/usr/bin/sv-log-agent --config /etc/sv-log-agent/agent.yaml
+Restart=always
+RestartSec=5
+StateDirectory=sv-log-agent
+DynamicUser=yes
+# Read access to the logs it tails, e.g. /var/log/nginx (group adm).
+SupplementaryGroups=adm
+LoadCredential=sv-client-secret:/etc/sv-log-agent/client-secret
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
