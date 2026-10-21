@@ -66,7 +66,7 @@ afterEach(() => {
 });
 
 describe("queue consumer", () => {
-	it("gzips the lines, presigns with size/sha256/time window, PUTs without Authorization, and acks", async () => {
+	it("gzips the lines, presigns with sha256 and time window, PUTs without Authorization, and acks", async () => {
 		const bodies = [
 			line("2026-10-20T12:00:05.000Z", "b") + line("2026-10-20T12:00:01.000Z", "a"),
 			line("2026-10-20T12:00:09.500Z", "c"),
@@ -88,33 +88,27 @@ describe("queue consumer", () => {
 		expect(sv.putCalls[0].headers["if-none-match"]).toBe("*");
 
 		const [obj] = [...sv.objects.values()];
-		expect(obj.body.byteLength).toBe(up.body.size);
-		expect(up.body.sha256).toMatch(/^[0-9a-f]{64}$/);
+		// sv-be no longer checks the hash, so check here that it is the SHA-256 of what was stored.
+		const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", obj.body));
+		expect(up.body.sha256).toBe([...digest].map((b) => b.toString(16).padStart(2, "0")).join(""));
+		expect(Object.keys(up.body).sort()).toEqual(["endTs", "instance", "sha256", "startTs"]);
 		expect(await gunzipText(obj.body)).toBe(bodies.join(""));
 	});
 
-	it("sends contentMd5 and PUTs with Content-MD5 for a non-AWS provider", async () => {
+	it("PUTs with no extra headers when sv-be signs none (non-AWS provider)", async () => {
 		sv.provider = "other";
 		const result = await run([line("2026-10-20T12:00:00.000Z", "x")]);
 		expect(result.explicitAcks).toEqual(["m0"]);
-		const up = sv.uploadCalls[0].body;
-		expect(up.contentMd5).toMatch(/^[A-Za-z0-9+/]{22}==$/);
-		expect(sv.putCalls[0].headers["content-md5"]).toBe(up.contentMd5);
 		expect(sv.putCalls[0].headers["if-none-match"]).toBeUndefined();
+		expect(sv.putCalls[0].headers.authorization).toBeUndefined();
 		expect(sv.objects.size).toBe(1);
 	});
 
-	it("computes MD5 with crypto.subtle in the Workers runtime", async () => {
-		// RFC 1321 test vector
-		const digest = new Uint8Array(await crypto.subtle.digest("MD5", new TextEncoder().encode("abc")));
-		expect([...digest].map((b) => b.toString(16).padStart(2, "0")).join("")).toBe("900150983cd24fb0d6963f7d28e17f72");
-	});
-
-	it("treats 400 content_md5_required as permanent", async () => {
-		sv.onUpload = () => Response.json({ error: "content_md5_required" }, { status: 400 });
+	it("treats 400 invalid_instance as permanent", async () => {
+		sv.onUpload = () => Response.json({ error: "invalid_instance" }, { status: 400 });
 		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
 		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
-		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("content_md5_required"));
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("invalid_instance"));
 	});
 
 	it("never forwards an Authorization header even if sv-be lists one", async () => {

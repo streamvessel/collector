@@ -33,7 +33,7 @@ function hex(buf: ArrayBuffer): string {
 	return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Joins the messages' lines, gzips and hashes them (SHA-256 and MD5), and finds the time window. */
+/** Joins the messages' lines, gzips and hashes them, and finds the time window. */
 async function prepareUpload(
 	bodies: QueueBody[],
 	fallbackTs: number,
@@ -53,16 +53,14 @@ async function prepareUpload(
 	}
 	if (!Number.isFinite(min)) min = max = fallbackTs;
 	const data = await gzip(bodies.join(""));
-	const [sha, md5] = await Promise.all([crypto.subtle.digest("SHA-256", data), crypto.subtle.digest("MD5", data)]);
+	const sha = await crypto.subtle.digest("SHA-256", data);
 	return {
 		gzip: data,
 		meta: {
 			startTs: new Date(min).toISOString(),
 			endTs: new Date(max).toISOString(),
-			size: data.byteLength,
+			// Names the file (its first 8 characters end the key); sv-be does not check it.
 			sha256: hex(sha),
-			// sv-be needs it for providers that verify Content-MD5 instead of SHA-256.
-			contentMd5: btoa(String.fromCharCode(...new Uint8Array(md5))),
 		},
 	};
 }
@@ -112,7 +110,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 			const target = await requestUpload(cfg, request);
 			const outcome = await putObject(target, upload.gzip);
 			if (outcome !== "url_refused") {
-				log("info", "uploaded", { key: target.key, outcome, bytes: request.size, messages: valid.length, attempts });
+				log("info", "uploaded", { key: target.key, outcome, bytes: upload.gzip.byteLength, messages: valid.length, attempts });
 				break;
 			}
 			if (++refusals >= MAX_URL_REFUSALS) {

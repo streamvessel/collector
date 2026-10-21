@@ -311,5 +311,6 @@ npm run typecheck
 npx wrangler dev    # runs locally; put secrets in .dev.vars
 ```
 
-The tests use a fake StreamVessel and a fake bucket. The fake bucket checks
-the upload the way a real S3 bucket would.
+The tests use a fake StreamVessel and a fake bucket. Like a real S3 bucket,
+the fake refuses an upload that carries an `Authorization` header, and answers
+`412` to a second upload of the same file when `If-None-Match` is set (AWS).
