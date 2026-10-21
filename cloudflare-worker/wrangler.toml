@@ -1,0 +1,67 @@
+# StreamVessel log agent as a Cloudflare Worker. Deploy with the "Deploy to
+# Cloudflare" button in README.md, or by hand after setting the three secrets
+# listed in .dev.vars.example:
+#   wrangler secret put SV_CLIENT_ID
+#   wrangler secret put SV_CLIENT_SECRET
+#   wrangler secret put BULK_PASSWORD
+name = "streamvessel-log-worker"
+main = "src/index.ts"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[vars]
+# StreamVessel origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
+SV_SERVER = "https://app.streamvessel.com"
+# Folder name for this Worker's files under the agent's prefix: [A-Za-z0-9._-]{1,63}.
+SV_INSTANCE = "cf-worker"
+# Basic auth user to enter in the App Platform log destination.
+BULK_USER = "streamvessel"
+# Request caps: as sent, and after gzip/deflate is removed. A request is held
+# in memory several times over while it is parsed, so keep these well under
+# the Worker's 128 MB memory limit.
+MAX_BODY_BYTES = "8388608"
+MAX_DECOMPRESSED_BYTES = "8388608"
+# "true" logs every request's method, path and headers (Authorization redacted) to `wrangler tail`.
+DEBUG_LOG_REQUESTS = "false"
+
+[[queues.producers]]
+queue = "sv-logs"
+binding = "LOG_QUEUE"
+
+# Not used by the code. Declared as a binding so that the "Deploy to
+# Cloudflare" flow creates the dead-letter queue along with sv-logs.
+[[queues.producers]]
+queue = "sv-logs-dlq"
+binding = "DEAD_LETTER_QUEUE"
+
+[[queues.consumers]]
+queue = "sv-logs"
+# One object per batch: up to 100 messages of < 120 KB each, so ~12 MB of lines at most.
+max_batch_size = 100
+max_batch_timeout = 60
+# The consumer sets its own delay on each retry: 30 s doubling to a 1 h cap, or
+# 1 h after a permanent refusal (invalid_client, agent_revoked). 72 retries
+# take at most 3 days, which ends before the queue's default 4-day retention
+# deletes a message, so a batch that keeps failing reaches the dead-letter
+# queue instead of expiring. Raise this only together with the retention.
+# retry_delay only applies if a batch fails without the consumer choosing a
+# delay (an uncaught exception).
+max_retries = 72
+retry_delay = 30
+dead_letter_queue = "sv-logs-dlq"
+
+# Per client IP, for all requests. App Platform sends from a few shared IPs,
+# so keep this generous.
+[[ratelimits]]
+name = "REQUEST_LIMITER"
+namespace_id = "7301"
+simple = { limit = 1200, period = 60 }
+
+# Per client IP, for failed Basic auth attempts only.
+[[ratelimits]]
+name = "AUTH_FAIL_LIMITER"
+namespace_id = "7302"
+simple = { limit = 10, period = 60 }
+
+[observability]
+enabled = true
