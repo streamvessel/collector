@@ -22,10 +22,14 @@ About once a minute, a new file appears in your bucket:
 <prefix>/<agentId>/cf-worker/20261021/20261021T120000Z_20261021T120100Z_3fa2b1c9.log.gz
 ```
 
-Each file is gzip-compressed, with one log record per line:
+Each file holds everything that arrived in that minute (up to about 12 MB
+before compression, often thousands of log records). It is gzip-compressed
+NDJSON: every line is one log record.
 
 ```json
 {"timestamp":"2026-10-21T12:00:01.123Z","level":"info","message":"GET / 200","attrs":{"app":"shop","component":"web"}}
+{"timestamp":"2026-10-21T12:00:01.456Z","level":"warn","message":"slow query 812ms","attrs":{"app":"shop","component":"api"}}
+…
 ```
 
 Open the agent's folder with **View logs** in StreamVessel to browse and
