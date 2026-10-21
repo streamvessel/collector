@@ -1,4 +1,5 @@
 # Secrets for this Worker. The "Deploy to Cloudflare" page asks for each one;
 # for `wrangler dev`, copy this file to .dev.vars and fill it in.
+# SV_CLIENT_ID is a plain variable: set it in wrangler.toml.
 SV_CLIENT_SECRET= # Required: your log agent's secret from StreamVessel (svas_...), shown once when you create the agent
 COLLECTOR_PASSWORD= # Required: a new password App Platform will use to send logs here; at least 16 characters, e.g. `openssl rand -base64 32`

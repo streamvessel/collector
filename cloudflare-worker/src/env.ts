@@ -31,7 +31,7 @@ export interface Env {
 	AUTH_FAIL_LIMITER?: RateLimit;
 }
 
-export const DEFAULT_INSTANCE = "cf-worker";
+const DEFAULT_INSTANCE = "cf-worker";
 // A request is held in memory several times over while it is parsed and
 // packed (about 8x its decompressed size), so these stay well under the
 // isolate's 128 MB.
@@ -59,9 +59,7 @@ export function uploadConfigProblems(env: Env): string[] {
 	if (!env.SV_CLIENT_ID) problems.push("SV_CLIENT_ID is not set");
 	else if (!CLIENT_ID_RE.test(env.SV_CLIENT_ID)) problems.push("SV_CLIENT_ID is not a StreamVessel client id (sva_ + 22 characters)");
 	if (!env.SV_CLIENT_SECRET) problems.push("SV_CLIENT_SECRET is not set");
-	else if (!env.SV_CLIENT_SECRET.startsWith("svas_") || PLACEHOLDER_RE.test(env.SV_CLIENT_SECRET)) {
-		problems.push("SV_CLIENT_SECRET is not a StreamVessel secret (svas_…)");
-	}
+	else if (!env.SV_CLIENT_SECRET.startsWith("svas_")) problems.push("SV_CLIENT_SECRET is not a StreamVessel secret (svas_…)");
 	const instance = instanceName(env);
 	if (!INSTANCE_RE.test(instance) || instance === "." || instance === "..") {
 		problems.push(`SV_INSTANCE ${JSON.stringify(instance)} must match [A-Za-z0-9._-]{1,63}`);

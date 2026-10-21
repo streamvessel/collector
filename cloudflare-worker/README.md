@@ -82,10 +82,10 @@ Keep the `COLLECTOR_PASSWORD`; you need it in step 2. Then open
 [Check that it works](#check-that-it-works)).
 
 The one-click setup always creates that repository; it is how Cloudflare
-deploys and later redeploys the Worker. If you don't want one, deploy by hand
-instead. Every commit to your copied
-repository redeploys the Worker. To pick up a newer version of this Worker,
-copy the changes from `streamvessel/collector` into your repository.
+deploys and later redeploys the Worker. Every commit to it redeploys the
+Worker. To pick up a newer version of this Worker, copy the changes from
+`streamvessel/collector` into your repository. If you don't want a
+repository, deploy by hand instead.
 
 **By hand.** With Node.js 22 or newer:
 

@@ -115,6 +115,8 @@ describe("authentication", () => {
 	});
 });
 
+type CheckBody = { ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> };
+
 describe("GET /_check", () => {
 	const auth = { authorization: basic("streamvessel", PASSWORD) };
 	afterEach(() => vi.unstubAllGlobals());
@@ -125,20 +127,20 @@ describe("GET /_check", () => {
 			tokenRequests.push(new Request(input).url);
 			return Response.json({ access_token: "svla_x", token_type: "Bearer", expires_in: 900 });
 		});
-		const { env } = makeEnv({ SV_CLIENT_ID: "sva_ReceiverTest-012345678", SV_CLIENT_SECRET: "svas_real" });
+		const { env } = makeEnv();
 		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
-		const body = (await res.json()) as { ok: boolean; checks: Array<{ name: string; ok: boolean }> };
+		const body = (await res.json()) as CheckBody;
 		expect(res.status).toBe(200);
 		expect(body.ok).toBe(true);
-		expect(body.checks.map((c) => c.name)).toEqual(["COLLECTOR_PASSWORD", "queue", "settings", "streamvessel"]);
+		expect(body.checks.map((c) => c.name)).toEqual(["queue", "settings", "streamvessel"]);
 		expect(tokenRequests).toEqual(["https://sv.test/be/ingest/oauth/token"]);
 	});
 
 	it("names invalid_client with a hint", async () => {
 		vi.stubGlobal("fetch", async () => Response.json({ error: "invalid_client" }, { status: 401 }));
-		const { env } = makeEnv({ SV_CLIENT_ID: "sva_ReceiverTest-012345678", SV_CLIENT_SECRET: "svas_wrong" });
+		const { env } = makeEnv();
 		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
-		const body = (await res.json()) as { ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> };
+		const body = (await res.json()) as CheckBody;
 		expect(res.status).toBe(503);
 		const sv = body.checks.find((c) => c.name === "streamvessel")!;
 		expect(sv.ok).toBe(false);
@@ -151,7 +153,7 @@ describe("GET /_check", () => {
 		vi.stubGlobal("fetch", fetchSpy);
 		const { env } = makeEnv({ SV_CLIENT_ID: "", SV_CLIENT_SECRET: "" });
 		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
-		const body = (await res.json()) as { ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> };
+		const body = (await res.json()) as CheckBody;
 		expect(res.status).toBe(503);
 		expect(body.checks.find((c) => c.name === "settings")!.detail).toContain("SV_CLIENT_ID is not set");
 		expect(fetchSpy).not.toHaveBeenCalled();
