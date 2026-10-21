@@ -47,7 +47,7 @@ const INSTANCE_RE = /^[A-Za-z0-9._-]{1,63}$/;
 export function passwordProblem(env: Env): string | null {
 	const pw = env.COLLECTOR_PASSWORD ?? "";
 	if (pw === "") return "COLLECTOR_PASSWORD is not set";
-	if (pw.length < MIN_PASSWORD_LENGTH) return `COLLECTOR_PASSWORD is shorter than ${MIN_PASSWORD_LENGTH} characters`;
+	if (pw.trim().length < MIN_PASSWORD_LENGTH) return `COLLECTOR_PASSWORD is shorter than ${MIN_PASSWORD_LENGTH} characters`;
 	if (PLACEHOLDER_RE.test(pw)) return "COLLECTOR_PASSWORD is still a placeholder";
 	return null;
 }

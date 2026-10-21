@@ -81,9 +81,14 @@ Keep the `COLLECTOR_PASSWORD`; you need it in step 2. Then open
 `https://<your-worker>/_check` to confirm the values work (see
 [Check that it works](#check-that-it-works)).
 
+Then open `wrangler.toml` in your new repository and check that
+`SV_CLIENT_ID` holds your client id. If it is still `""`, set it there and
+commit. Every commit redeploys the Worker with the values in `wrangler.toml`,
+so a client id that is only in the dashboard would be wiped by the next
+commit. (The two secrets are stored by Cloudflare and are not affected.)
+
 The one-click setup always creates that repository; it is how Cloudflare
-deploys and later redeploys the Worker. Every commit to it redeploys the
-Worker. To pick up a newer version of this Worker, copy the changes from
+deploys and later redeploys the Worker. To pick up a newer version of this Worker, copy the changes from
 `streamvessel/collector` into your repository. If you don't want a
 repository, deploy by hand instead.
 
@@ -228,6 +233,17 @@ npx wrangler queues update sv-logs --message-retention-period-secs 1209600
 In **Workers Logs**, set up an alert on `upload_refused_permanently`. In the
 **Queues** dashboard, watch the backlog of `sv-logs-dlq`; it should stay at 0.
 
+### Upgrade from the first version
+
+The first version used `BULK_PASSWORD`, `BULK_USER` and a `SV_CLIENT_ID`
+secret. After copying in this version:
+
+1. `npx wrangler secret put COLLECTOR_PASSWORD` with the same value as
+   `BULK_PASSWORD`, so App Platform keeps working unchanged.
+2. `npx wrangler secret delete SV_CLIENT_ID`, then set `SV_CLIENT_ID` in
+   `wrangler.toml` (a secret and a variable cannot share a name).
+3. Deploy, open `/_check`, then `npx wrangler secret delete BULK_PASSWORD`.
+
 ### Rotate the secret
 
 1. Add a second secret to the agent in StreamVessel.
@@ -288,6 +304,8 @@ Running more than one Worker on the same agent? Give each one its own
 speaks:
 
 - `GET /` returns a version document.
+- `GET /_check` checks the settings and the StreamVessel credentials (see
+  [Check that it works](#check-that-it-works)).
 - `POST /_bulk` and `POST /<index>/_bulk` accept logs.
 
 It checks the password in constant time and accepts gzip-compressed requests.

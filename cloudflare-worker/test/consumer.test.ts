@@ -7,7 +7,7 @@ import { resetTokenCache } from "../src/svclient";
 import { FakeSvBe, gunzipText } from "./fake-svbe";
 
 let sv: FakeSvBe;
-let errorLog: { mock: { calls: unknown[][] } };
+let errorLog: { mock: { calls: unknown[][] }; mockClear(): void };
 
 function testEnv(overrides: Partial<Env> = {}): Env {
 	return {
@@ -268,6 +268,7 @@ describe("queue consumer", () => {
 		];
 		for (const [overrides, message] of cases) {
 			resetConsumerState();
+			errorLog.mockClear();
 			const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv(overrides));
 			expect(r.retryMessages, message).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
 			expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(message));

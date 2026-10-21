@@ -159,6 +159,17 @@ describe("GET /_check", () => {
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
 
+	it("is not served while COLLECTOR_PASSWORD is unusable, and asks StreamVessel nothing", async () => {
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		for (const pw of ["", "REPLACE_ME", " ".repeat(20)]) {
+			const { env } = makeEnv({ COLLECTOR_PASSWORD: pw });
+			const res = await handleFetch(new Request("https://worker.test/_check", { headers: { authorization: basic("streamvessel", pw) } }), env);
+			expect(res.status, JSON.stringify(pw)).toBe(500);
+		}
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
 	it("needs the password like every other route", async () => {
 		const { env } = makeEnv();
 		expect((await handleFetch(new Request("https://worker.test/_check"), env)).status).toBe(401);
