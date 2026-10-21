@@ -26,7 +26,7 @@ type Override = (req: Request) => Response | Promise<Response> | undefined;
 export class FakeSvBe {
 	readonly server = "https://sv.test";
 	readonly bucket = "https://bucket.test";
-	clientId = "sva_testclient";
+	clientId = "sva_TestClient-0123456789_";
 	clientSecret = "svas_testsecret";
 	provider: Provider = "aws";
 
@@ -62,7 +62,9 @@ export class FakeSvBe {
 		const custom = await this.onToken?.(req);
 		if (custom) return custom;
 		const expected = "Basic " + btoa(`${this.clientId}:${this.clientSecret}`);
-		if (req.headers.get("authorization") !== expected || body !== "grant_type=client_credentials") {
+		const [id] = atob(req.headers.get("authorization")?.replace(/^Basic /, "") ?? "").split(":");
+		// sv-be refuses anything that cannot be a client id before looking it up.
+		if (!/^sva_[A-Za-z0-9_-]{22}$/.test(id) || req.headers.get("authorization") !== expected || body !== "grant_type=client_credentials") {
 			return Response.json({ error: "invalid_client" }, { status: 401 });
 		}
 		const token = `svla_${++this.seq}`;

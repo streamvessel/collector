@@ -167,7 +167,9 @@ or **Workers Logs** in the Cloudflare dashboard).
 | `429` from the Worker | Rate limit reached | Raise the limits in `wrangler.toml` |
 | `upload_refused_permanently` with `invalid_client` | Client id or secret is wrong, deleted, or the agent was revoked | Check the agent in StreamVessel and update the secrets |
 | `upload_refused_permanently` with `agent_revoked` or `scope_changed` | The agent was revoked, or its bucket connection no longer reaches its folder | Check the agent and its connection in StreamVessel; if revoked, create a new agent and update the secrets |
-| `upload_failed` | StreamVessel or the bucket is unreachable for now | Nothing; the Worker keeps retrying |
+| `upload_refused_permanently` with `too_many_instances` | The agent already has 50 instance folders | Reuse an existing `SV_INSTANCE`, or use another agent |
+| `upload_refused_permanently` with `connection_unreadable` | StreamVessel can no longer use the agent's bucket connection (for example, its keys changed) | Fix the connection in StreamVessel |
+| `upload_failed` | StreamVessel or the bucket is unreachable for now (including `storage_unavailable` and `rate_limited`) | Nothing; the Worker keeps retrying |
 | `uploaded` | A file was written | All good |
 
 After a permanent error, the Worker retries each batch once an hour instead

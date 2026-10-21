@@ -213,6 +213,27 @@ describe("queue consumer", () => {
 		expect(sv.tokenCalls).toHaveLength(1);
 	});
 
+	it("treats 409 too_many_instances / connection_unreadable as permanent and 502 storage_unavailable as transient", async () => {
+		for (const error of ["too_many_instances", "connection_unreadable"]) {
+			resetConsumerState();
+			sv.onUpload = () => Response.json({ error }, { status: 409 });
+			const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
+			expect(r.retryMessages, error).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+		}
+		resetConsumerState();
+		sv.onUpload = () => Response.json({ error: "storage_unavailable" }, { status: 502 });
+		const t = await run([line("2026-10-20T12:00:00.000Z", "x")]);
+		expect(t.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 30 }]);
+	});
+
+	it("refuses a client id that cannot be one, as sv-be does (invalid_client, permanent)", async () => {
+		// Id and secret match the fake's records, so only the shape check can refuse it.
+		sv.clientId = "sva_short";
+		const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv({ SV_CLIENT_ID: "sva_short" }));
+		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("invalid_client"));
+	});
+
 	it("treats 403 agent_revoked from uploads as permanent", async () => {
 		sv.onUpload = () => Response.json({ error: "agent_revoked" }, { status: 403 });
 		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);

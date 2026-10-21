@@ -28,7 +28,7 @@ function makeEnv(overrides: Partial<Env> = {}): { env: Env; queue: FakeQueue } {
 		env: {
 			LOG_QUEUE: queue as unknown as Queue<QueueBody>,
 			SV_SERVER: "https://sv.test",
-			SV_CLIENT_ID: "sva_x",
+			SV_CLIENT_ID: "sva_ReceiverTest-012345678",
 			SV_CLIENT_SECRET: "svas_x",
 			BULK_USER: "streamvessel",
 			BULK_PASSWORD: PASSWORD,
