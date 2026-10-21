@@ -1,9 +1,8 @@
 import type { QueueBody } from "./batching";
-import { DEFAULT_INSTANCE, PLACEHOLDER_RE, type Env } from "./env";
+import { instanceName, uploadConfigProblems, type Env } from "./env";
 import { log } from "./log";
 import { PermanentError, putObject, requestUpload, TransientError, type SvConfig, type UploadRequest } from "./svclient";
 
-const INSTANCE_RE = /^[A-Za-z0-9._-]{1,63}$/;
 /** New URLs per batch after a 403 on the PUT, before the batch is retried later. */
 const MAX_URL_REFUSALS = 3;
 /** Backoff for transient failures: 30 s doubling per attempt, capped at an hour. */
@@ -111,18 +110,11 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 		return;
 	}
 
-	const instance = env.SV_INSTANCE?.trim() || DEFAULT_INSTANCE;
+	const instance = instanceName(env);
 	const cfg: SvConfig = { server: env.SV_SERVER, clientId: env.SV_CLIENT_ID, clientSecret: env.SV_CLIENT_SECRET };
 	try {
-		if (!cfg.server || !cfg.clientId || !cfg.clientSecret) {
-			throw new PermanentError("misconfigured", "SV_SERVER, SV_CLIENT_ID and SV_CLIENT_SECRET must be set");
-		}
-		if (!cfg.clientId.startsWith("sva_") || PLACEHOLDER_RE.test(cfg.clientId) || PLACEHOLDER_RE.test(cfg.clientSecret)) {
-			throw new PermanentError("misconfigured", "SV_CLIENT_ID / SV_CLIENT_SECRET are still placeholders; set the agent's real values");
-		}
-		if (!INSTANCE_RE.test(instance) || instance === "." || instance === "..") {
-			throw new PermanentError("misconfigured", `SV_INSTANCE ${JSON.stringify(instance)} must match [A-Za-z0-9._-]{1,63}`);
-		}
+		const problems = uploadConfigProblems(env);
+		if (problems.length > 0) throw new PermanentError("misconfigured", problems.join("; "));
 		const queued = valid.map((m) => m.timestamp.getTime());
 		const upload = await prepareUpload(
 			valid.map((m) => m.body as string),

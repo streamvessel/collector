@@ -1,6 +1,4 @@
-# Secrets for this Worker. The "Deploy to Cloudflare" page asks for each of
-# these, prefilled with REPLACE_ME: replace every one. The Worker refuses to
-# run with a placeholder. For `wrangler dev`, copy this file to .dev.vars.
-SV_CLIENT_ID=REPLACE_ME # the log agent's client id (sva_...), from StreamVessel
-SV_CLIENT_SECRET=REPLACE_ME # the log agent's secret (svas_...), shown once when you create it
-BULK_PASSWORD=REPLACE_ME # a new password App Platform will send; at least 16 characters, e.g. `openssl rand -base64 32`
+# Secrets for this Worker. The "Deploy to Cloudflare" page asks for each one;
+# for `wrangler dev`, copy this file to .dev.vars and fill it in.
+SV_CLIENT_SECRET= # Required: your log agent's secret from StreamVessel (svas_...), shown once when you create the agent
+COLLECTOR_PASSWORD= # Required: a new password App Platform will use to send logs here; at least 16 characters, e.g. `openssl rand -base64 32`

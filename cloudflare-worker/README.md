@@ -64,20 +64,26 @@ Cloudflare then:
 1. asks you to log in, and copies this Worker into a new repository in your
    GitHub or GitLab account;
 2. creates the two queues, `sv-logs` and `sv-logs-dlq`;
-3. asks for three secrets. The fields come prefilled with the placeholder
-   `REPLACE_ME` (shown as dots, because they are secrets). **Clear each field
-   and enter the real value**; the Worker refuses to run with a placeholder.
+3. asks for these values (the two secrets are shown as dots while you type):
 
-   | Secret | Value |
+   | Field | Value |
    |---|---|
-   | `SV_CLIENT_ID` | the agent's client id (`sva_…`) |
-   | `SV_CLIENT_SECRET` | the agent's secret (`svas_…`) |
-   | `BULK_PASSWORD` | a new password for App Platform to use; at least 16 characters, for example from `openssl rand -base64 32` |
+   | `SV_CLIENT_ID` | the agent's client id: `sva_` followed by 22 characters |
+   | `SV_CLIENT_SECRET` (secret) | the agent's secret, starting with `svas_` |
+   | `COLLECTOR_PASSWORD` (secret) | a new password for App Platform to use; at least 16 characters, for example from `openssl rand -base64 32` |
+
+   Leave the other fields as they are.
 
 4. deploys, and shows your Worker's address, for example
    `https://streamvessel-log-worker.<your-account>.workers.dev`.
 
-Keep the `BULK_PASSWORD`; you need it in step 2. Every commit to your copied
+Keep the `COLLECTOR_PASSWORD`; you need it in step 2. Then open
+`https://<your-worker>/_check` to confirm the values work (see
+[Check that it works](#check-that-it-works)).
+
+The one-click setup always creates that repository; it is how Cloudflare
+deploys and later redeploys the Worker. If you don't want one, deploy by hand
+instead. Every commit to your copied
 repository redeploys the Worker. To pick up a newer version of this Worker,
 copy the changes from `streamvessel/collector` into your repository.
 
@@ -90,9 +96,9 @@ npm ci
 npx wrangler login
 npx wrangler queues create sv-logs
 npx wrangler queues create sv-logs-dlq
-npx wrangler secret put SV_CLIENT_ID       # paste the client id (sva_…)
-npx wrangler secret put SV_CLIENT_SECRET   # paste the secret (svas_…)
-npx wrangler secret put BULK_PASSWORD      # a new password for App Platform to use
+# edit wrangler.toml: set SV_CLIENT_ID = "sva_…" (the agent's client id)
+npx wrangler secret put SV_CLIENT_SECRET     # paste the secret (svas_…)
+npx wrangler secret put COLLECTOR_PASSWORD   # a new password for App Platform to use
 npx wrangler deploy
 ```
 
@@ -111,7 +117,7 @@ Forwarding → Add Destination**, and choose **OpenSearch**:
 |---|---|
 | Endpoint | your Worker's address from step 1 |
 | User | `streamvessel` |
-| Password | the `BULK_PASSWORD` from step 1 |
+| Password | the `COLLECTOR_PASSWORD` from step 1 |
 | Index name | anything, for example `logs` |
 
 Or add it to the app spec of each component whose logs you want:
@@ -125,18 +131,23 @@ services:
           endpoint: https://streamvessel-log-worker.<your-account>.workers.dev
           basic_auth:
             user: streamvessel
-            password: ${BULK_PASSWORD}   # store as an encrypted app env var
+            password: ${COLLECTOR_PASSWORD}   # store as an encrypted app env var
           index_name: logs
 ```
 
 ## Check that it works
 
-1. Ask the Worker for its version. You should get a JSON document that
-   mentions `opensearch`:
+1. Open the check page in a browser (user `streamvessel`, your
+   `COLLECTOR_PASSWORD`), or with curl:
 
    ```sh
-   curl -u streamvessel:YOUR_PASSWORD https://streamvessel-log-worker.<your-account>.workers.dev/
+   curl -u streamvessel:YOUR_PASSWORD https://streamvessel-log-worker.<your-account>.workers.dev/_check
    ```
+
+   It checks every setting and asks StreamVessel for a token, without
+   uploading anything. `"ok": true` means the Worker is ready. Otherwise each
+   failed check says what is wrong, for example
+   `SV_CLIENT_ID is not a StreamVessel client id` or `invalid_client`.
 
 2. Send a test log line. You should get `"errors":false`:
 
@@ -163,9 +174,9 @@ or **Workers Logs** in the Cloudflare dashboard).
 
 | You see | Meaning | What to do |
 |---|---|---|
-| `401` from the Worker | Wrong user or password | Check the App Platform destination matches `BULK_PASSWORD` |
-| `500` "receiver is not configured" | `BULK_PASSWORD` is missing, shorter than 16 characters, or still the `REPLACE_ME` placeholder | Set a real password (Cloudflare dashboard → your Worker → **Settings → Variables and Secrets**, or `wrangler secret put BULK_PASSWORD`) |
-| `upload_refused_permanently` with `misconfigured` | `SV_CLIENT_ID` or `SV_CLIENT_SECRET` is still the placeholder, or a setting is invalid | Set the agent's real client id and secret |
+| `401` from the Worker | Wrong user or password | Check the App Platform destination matches `COLLECTOR_PASSWORD` |
+| `500` "receiver is not configured: …" | `COLLECTOR_PASSWORD` is missing, shorter than 16 characters, or a placeholder | Set a real password (Cloudflare dashboard → your Worker → **Settings → Variables and Secrets**, or `wrangler secret put COLLECTOR_PASSWORD`) |
+| `upload_refused_permanently` with `misconfigured` | `SV_CLIENT_ID` or `SV_CLIENT_SECRET` is missing or malformed, or `SV_INSTANCE` is invalid; the log line says which | Fix that setting; `/_check` shows the same message |
 | `413` from the Worker | Request larger than 8 MiB | Have the sender send smaller batches. Raising `MAX_BODY_BYTES` / `MAX_DECOMPRESSED_BYTES` risks the Worker's 128 MB memory limit |
 | `429` from the Worker | Rate limit reached | Raise the limits in `wrangler.toml` |
 | `upload_refused_permanently` with `invalid_client` | Client id or secret is wrong, deleted, or the agent was revoked | Check the agent in StreamVessel and update the secrets |
@@ -257,10 +268,10 @@ dashboard (your Worker → **Settings → Variables and Secrets**) or with
 | Name | Type | Default | What it does |
 |---|---|---|---|
 | `SV_SERVER` | variable | `https://app.streamvessel.com` | Your StreamVessel address |
-| `SV_CLIENT_ID` | secret | — | Agent client id (`sva_…`) |
+| `SV_CLIENT_ID` | variable | — | Agent client id (`sva_` + 22 characters). Public, so not a secret |
 | `SV_CLIENT_SECRET` | secret | — | Agent secret (`svas_…`) |
-| `BULK_PASSWORD` | secret | — | Password App Platform uses; at least 16 characters |
-| `BULK_USER` | variable | `streamvessel` | User App Platform uses. Remove it to accept any user name |
+| `COLLECTOR_PASSWORD` | secret | — | Password App Platform uses; at least 16 characters |
+| `COLLECTOR_USER` | variable | `streamvessel` | User App Platform uses. Remove it to accept any user name |
 | `SV_INSTANCE` | variable | `cf-worker` | Folder name for this Worker's files. Letters, digits, `.`, `_`, `-`; up to 63 characters |
 | `MAX_BODY_BYTES` | variable | 8 MiB | Largest request accepted |
 | `MAX_DECOMPRESSED_BYTES` | variable | 8 MiB | Largest request accepted after unzipping |

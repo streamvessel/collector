@@ -96,12 +96,8 @@ async function send(what: string, input: string, init: RequestInit): Promise<Res
 	}
 }
 
-async function getToken(cfg: SvConfig): Promise<string> {
-	const now = Date.now();
-	const cacheKey = `${cfg.server} ${cfg.clientId}`;
-	if (cachedToken && cachedToken.cacheKey === cacheKey && cachedToken.expiresAt - TOKEN_REFRESH_MARGIN_MS > now) {
-		return cachedToken.token;
-	}
+/** Asks sv-be for a new token, bypassing the cache; `/_check` uses it to test the credentials. */
+export async function requestToken(cfg: SvConfig): Promise<{ token: string; expiresIn: number }> {
 	// RFC 6749 §2.3.1: client_secret_basic, form-urlencoded id and secret.
 	const basic = btoa(`${encodeURIComponent(cfg.clientId)}:${encodeURIComponent(cfg.clientSecret)}`);
 	const res = await send("token request", endpoint(cfg, "/be/ingest/oauth/token"), {
@@ -119,8 +115,18 @@ async function getToken(cfg: SvConfig): Promise<string> {
 		throw new TransientError("token request: response has no access_token");
 	}
 	const expiresIn = typeof body.expires_in === "number" && body.expires_in > 0 ? body.expires_in : 900;
-	cachedToken = { cacheKey, token: body.access_token, expiresAt: now + expiresIn * 1000 };
-	return body.access_token;
+	return { token: body.access_token, expiresIn };
+}
+
+async function getToken(cfg: SvConfig): Promise<string> {
+	const now = Date.now();
+	const cacheKey = `${cfg.server} ${cfg.clientId}`;
+	if (cachedToken && cachedToken.cacheKey === cacheKey && cachedToken.expiresAt - TOKEN_REFRESH_MARGIN_MS > now) {
+		return cachedToken.token;
+	}
+	const { token, expiresIn } = await requestToken(cfg);
+	cachedToken = { cacheKey, token, expiresAt: now + expiresIn * 1000 };
+	return token;
 }
 
 export async function requestUpload(cfg: SvConfig, req: UploadRequest): Promise<UploadTarget> {
