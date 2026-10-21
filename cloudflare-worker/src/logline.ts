@@ -11,13 +11,6 @@ const LEVEL_FIELDS = ["level", "severity", "log.level", "levelname", "loglevel",
 /** Longest line (UTF-8 bytes, without the newline) kept as is; longer messages are cut. */
 export const MAX_LINE_BYTES = 100_000;
 
-export interface LogLine {
-	/** The NDJSON line, without the trailing newline. */
-	line: string;
-	/** Epoch milliseconds of `timestamp`. */
-	ts: number;
-}
-
 const encoder = new TextEncoder();
 
 export function utf8Length(s: string): number {
@@ -26,7 +19,7 @@ export function utf8Length(s: string): number {
 
 function takeFirst(rest: Record<string, unknown>, keys: string[]): unknown {
 	for (const k of keys) {
-		if (k in rest && rest[k] !== null && rest[k] !== undefined) {
+		if (rest[k] != null) {
 			const v = rest[k];
 			delete rest[k];
 			return v;
@@ -58,10 +51,11 @@ function truncateUtf8(s: string, maxBytes: number): string {
 	const bytes = encoder.encode(s);
 	if (bytes.byteLength <= maxBytes) return s;
 	// Decoding a cut that lands mid-character yields U+FFFD; drop it.
-	return new TextDecoder().decode(bytes.subarray(0, maxBytes)).replace(/�$/, "");
+	return new TextDecoder().decode(bytes.subarray(0, maxBytes)).replace(/\uFFFD$/, "");
 }
 
-export function toLogLine(doc: Record<string, unknown>, index: string | undefined, receivedAt: number): LogLine {
+/** Returns the NDJSON line, without the trailing newline. */
+export function toLogLine(doc: Record<string, unknown>, index: string | undefined, receivedAt: number): string {
 	const rest: Record<string, unknown> = { ...doc };
 	const rawTs = takeFirst(rest, TIMESTAMP_FIELDS);
 	const rawMessage = takeFirst(rest, MESSAGE_FIELDS);
@@ -86,22 +80,22 @@ export function toLogLine(doc: Record<string, unknown>, index: string | undefine
 	if (Object.keys(rest).length > 0) out.attrs = rest;
 
 	let line = JSON.stringify(out);
-	if (encoder.encode(line).byteLength > MAX_LINE_BYTES) {
+	if (utf8Length(line) > MAX_LINE_BYTES) {
 		// Keep timestamp, level and as much of the message as fits; attrs go
 		// first since they are the least useful part of an oversized record.
 		const slim: Record<string, unknown> = { timestamp: out.timestamp };
 		if (out.level !== undefined) slim.level = out.level;
 		slim.message = "";
 		slim.attrs = { truncated: true };
-		const budget = MAX_LINE_BYTES - encoder.encode(JSON.stringify(slim)).byteLength;
+		const budget = MAX_LINE_BYTES - utf8Length(JSON.stringify(slim));
 		// JSON escaping can grow the message up to 6x (\u00XX); shrink until it fits.
 		let cut = truncateUtf8(message, budget);
 		for (;;) {
 			slim.message = cut;
 			line = JSON.stringify(slim);
-			if (encoder.encode(line).byteLength <= MAX_LINE_BYTES) break;
-			cut = truncateUtf8(cut, Math.floor(encoder.encode(cut).byteLength * 0.8));
+			if (utf8Length(line) <= MAX_LINE_BYTES) break;
+			cut = truncateUtf8(cut, Math.floor(utf8Length(cut) * 0.8));
 		}
 	}
-	return { line, ts };
+	return line;
 }

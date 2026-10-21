@@ -1,13 +1,5 @@
 import { toLogLine } from "./logline";
-
-export class BulkRequestError extends Error {
-	constructor(
-		readonly type: string,
-		message: string,
-	) {
-		super(message);
-	}
-}
+import { RequestError } from "./opensearch";
 
 type Op = "index" | "create" | "update" | "delete";
 const OPS: readonly Op[] = ["index", "create", "update", "delete"];
@@ -44,12 +36,13 @@ export function parseBulk(body: string, pathIndex: string | undefined, receivedA
 		try {
 			action = JSON.parse(actionLine);
 		} catch {
-			throw new BulkRequestError("illegal_argument_exception", "Malformed action/metadata line, expected a JSON object");
+			throw new RequestError(400, "illegal_argument_exception", "Malformed action/metadata line, expected a JSON object");
 		}
 		const keys = isObject(action) ? Object.keys(action) : [];
 		const op = keys.length === 1 ? OPS.find((o) => o === keys[0]) : undefined;
 		if (!op || !isObject(action)) {
-			throw new BulkRequestError(
+			throw new RequestError(
+				400,
 				"illegal_argument_exception",
 				`Malformed action/metadata line, expected one of [${OPS.join(", ")}]`,
 			);
@@ -57,34 +50,35 @@ export function parseBulk(body: string, pathIndex: string | undefined, receivedA
 		const meta = isObject(action[op]) ? (action[op] as Record<string, unknown>) : {};
 		const index = typeof meta._index === "string" ? meta._index : pathIndex;
 		const id = typeof meta._id === "string" || typeof meta._id === "number" ? String(meta._id) : crypto.randomUUID();
+		const reject = (type: string, reason: string) => items.push({ op, index, id, error: { type, reason } });
 
 		if (op === "delete") {
-			items.push({ op, index, id, error: { type: "illegal_argument_exception", reason: "delete is not supported" } });
+			reject("illegal_argument_exception", "delete is not supported");
 			continue;
 		}
 		const docLine = next();
 		if (docLine === undefined) {
-			throw new BulkRequestError("action_request_validation_exception", `Validation Failed: 1: ${op} is missing a document line;`);
+			throw new RequestError(400, "action_request_validation_exception", `Validation Failed: 1: ${op} is missing a document line;`);
 		}
 		if (op === "update") {
-			items.push({ op, index, id, error: { type: "illegal_argument_exception", reason: "update is not supported" } });
+			reject("illegal_argument_exception", "update is not supported");
 			continue;
 		}
 		let doc: unknown;
 		try {
 			doc = JSON.parse(docLine);
 		} catch {
-			items.push({ op, index, id, error: { type: "mapper_parsing_exception", reason: "failed to parse document" } });
+			reject("mapper_parsing_exception", "failed to parse document");
 			continue;
 		}
 		if (!isObject(doc)) {
-			items.push({ op, index, id, error: { type: "mapper_parsing_exception", reason: "document is not a JSON object" } });
+			reject("mapper_parsing_exception", "document is not a JSON object");
 			continue;
 		}
-		items.push({ op, index, id, line: toLogLine(doc, index, receivedAt).line });
+		items.push({ op, index, id, line: toLogLine(doc, index, receivedAt) });
 	}
 	if (items.length === 0) {
-		throw new BulkRequestError("action_request_validation_exception", "Validation Failed: 1: no requests added;");
+		throw new RequestError(400, "action_request_validation_exception", "Validation Failed: 1: no requests added;");
 	}
 	return items;
 }

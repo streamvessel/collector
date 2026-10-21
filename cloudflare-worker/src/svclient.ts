@@ -36,7 +36,6 @@ export interface UploadTarget {
 	url: string;
 	headers: Record<string, string>;
 	key: string;
-	expiresAt?: string;
 }
 
 /** Refresh this long before the token expires. */
@@ -94,7 +93,8 @@ async function send(what: string, input: string, init: RequestInit): Promise<Res
 	}
 }
 
-export async function getToken(cfg: SvConfig, now = Date.now()): Promise<string> {
+async function getToken(cfg: SvConfig): Promise<string> {
+	const now = Date.now();
 	const cacheKey = `${cfg.server} ${cfg.clientId}`;
 	if (cachedToken && cachedToken.cacheKey === cacheKey && cachedToken.expiresAt - TOKEN_REFRESH_MARGIN_MS > now) {
 		return cachedToken.token;
@@ -144,11 +144,11 @@ export async function requestUpload(cfg: SvConfig, req: UploadRequest): Promise<
 		for (const [k, v] of Object.entries(body.headers ?? {})) {
 			if (typeof v === "string") headers[k] = v;
 		}
-		return { url: body.url, headers, key: body.key, expiresAt: body.expiresAt };
+		return { url: body.url, headers, key: body.key };
 	}
 }
 
-export type PutOutcome = "stored" | "exists" | "url_refused";
+type PutOutcome = "stored" | "exists" | "url_refused";
 
 /**
  * PUTs the object with exactly the headers sv-be signed and never an

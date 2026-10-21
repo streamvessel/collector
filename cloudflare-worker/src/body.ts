@@ -1,12 +1,12 @@
-export class BodyError extends Error {
-	constructor(
-		readonly status: 400 | 413 | 415,
-		readonly type: string,
-		message: string,
-	) {
-		super(message);
-	}
-}
+import { RequestError } from "./opensearch";
+
+const FORMATS = new Map<string, "gzip" | "deflate" | null>([
+	["", null],
+	["identity", null],
+	["gzip", "gzip"],
+	["x-gzip", "gzip"],
+	["deflate", "deflate"],
+]);
 
 /** Passes bytes through and fails the stream once more than `cap` have gone by. */
 function capStream(cap: number, what: string): TransformStream<Uint8Array, Uint8Array> {
@@ -15,31 +15,12 @@ function capStream(cap: number, what: string): TransformStream<Uint8Array, Uint8
 		transform(chunk, controller) {
 			seen += chunk.byteLength;
 			if (seen > cap) {
-				controller.error(new BodyError(413, "content_too_long_exception", `${what} exceeds ${cap} bytes`));
+				controller.error(new RequestError(413, "content_too_long_exception", `${what} exceeds ${cap} bytes`));
 				return;
 			}
 			controller.enqueue(chunk);
 		},
 	});
-}
-
-async function collect(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
-	const chunks: Uint8Array[] = [];
-	let total = 0;
-	const reader = stream.getReader();
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		chunks.push(value);
-		total += value.byteLength;
-	}
-	const out = new Uint8Array(total);
-	let offset = 0;
-	for (const c of chunks) {
-		out.set(c, offset);
-		offset += c.byteLength;
-	}
-	return out;
 }
 
 /**
@@ -50,27 +31,15 @@ async function collect(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> 
 export async function readBody(request: Request, maxBody: number, maxDecompressed: number): Promise<string> {
 	const declared = Number(request.headers.get("content-length") ?? "NaN");
 	if (Number.isFinite(declared) && declared > maxBody) {
-		throw new BodyError(413, "content_too_long_exception", `request body exceeds ${maxBody} bytes`);
+		throw new RequestError(413, "content_too_long_exception", `request body exceeds ${maxBody} bytes`);
 	}
 	if (!request.body) return "";
 
 	const encoding = (request.headers.get("content-encoding") ?? "identity").trim().toLowerCase();
-	let format: "gzip" | "deflate" | null;
-	switch (encoding) {
-		case "":
-		case "identity":
-			format = null;
-			break;
-		case "gzip":
-		case "x-gzip":
-			format = "gzip";
-			break;
-		case "deflate":
-			format = "deflate";
-			break;
-		default:
-			throw new BodyError(415, "illegal_argument_exception", `unsupported Content-Encoding: ${encoding}`);
+	if (!FORMATS.has(encoding)) {
+		throw new RequestError(415, "illegal_argument_exception", `unsupported Content-Encoding: ${encoding}`);
 	}
+	const format = FORMATS.get(encoding);
 
 	let stream = request.body.pipeThrough(capStream(maxBody, "request body"));
 	if (format) {
@@ -79,12 +48,10 @@ export async function readBody(request: Request, maxBody: number, maxDecompresse
 			.pipeThrough(capStream(maxDecompressed, "decompressed request body"));
 	}
 
-	let bytes: Uint8Array;
 	try {
-		bytes = await collect(stream);
+		return await new Response(stream).text();
 	} catch (err) {
-		if (err instanceof BodyError) throw err;
-		throw new BodyError(400, "parse_exception", `cannot decode request body: ${String(err)}`);
+		if (err instanceof RequestError) throw err;
+		throw new RequestError(400, "parse_exception", `cannot decode request body: ${String(err)}`);
 	}
-	return new TextDecoder().decode(bytes);
 }

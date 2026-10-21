@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_BATCH_BYTES, MAX_BATCH_MESSAGES, MAX_MESSAGE_BYTES, type QueueBody } from "../src/batching";
+import { gzip } from "../src/consumer";
 import type { Env } from "../src/env";
 import worker, { handleFetch } from "../src/index";
 
@@ -10,9 +11,6 @@ const encoder = new TextEncoder();
 class FakeQueue {
 	calls: Array<Array<{ body: QueueBody; contentType?: string }>> = [];
 	failOnCall?: number;
-	async send(): Promise<void> {
-		throw new Error("send() is not used");
-	}
 	async sendBatch(messages: Iterable<MessageSendRequest<QueueBody>>): Promise<void> {
 		const list = [...messages] as Array<{ body: QueueBody; contentType?: string }>;
 		if (this.failOnCall === this.calls.length) throw new Error("queue unavailable");
@@ -57,11 +55,6 @@ function bulkRequest(body: BodyInit, init: { path?: string; headers?: Record<str
 
 function ndjson(docs: Array<Record<string, unknown>>, action: "index" | "create" = "index"): string {
 	return docs.map((d) => `{"${action}":{}}\n${JSON.stringify(d)}\n`).join("");
-}
-
-async function gzip(text: string): Promise<Uint8Array> {
-	const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
-	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
 describe("authentication", () => {

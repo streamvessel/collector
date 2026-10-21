@@ -22,7 +22,7 @@ export interface Env {
 	MAX_BODY_BYTES?: string;
 	/** Cap on the request body after Content-Encoding is removed (bytes). */
 	MAX_DECOMPRESSED_BYTES?: string;
-	/** "true" logs a summary of every request (headers redacted) for `wrangler tail`. */
+	/** "true" logs a summary of every request (Authorization redacted) for `wrangler tail`. */
 	DEBUG_LOG_REQUESTS?: string;
 
 	/** Per-IP limit on all requests. Optional: unbound means unlimited. */

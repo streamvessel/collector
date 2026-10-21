@@ -61,7 +61,7 @@ export class FakeSvBe {
 	};
 
 	private async token(req: Request): Promise<Response> {
-		const body = await req.clone().text();
+		const body = new TextDecoder().decode(await req.clone().arrayBuffer());
 		this.tokenCalls.push({ auth: req.headers.get("authorization"), body });
 		const custom = await this.onToken?.(req);
 		if (custom) return custom;

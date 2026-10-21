@@ -1,6 +1,7 @@
 import type { QueueBody } from "./batching";
 import { DEFAULT_INSTANCE, type Env } from "./env";
-import { PermanentError, putObject, requestUpload, TransientError, type SvConfig } from "./svclient";
+import { log } from "./log";
+import { PermanentError, putObject, requestUpload, TransientError, type SvConfig, type UploadRequest } from "./svclient";
 
 const INSTANCE_RE = /^[A-Za-z0-9._-]{1,63}$/;
 /** New URLs per batch after a 403 on the PUT, before the batch is retried later. */
@@ -8,6 +9,8 @@ const MAX_URL_REFUSALS = 3;
 /** Backoff for transient failures: 30 s doubling per attempt, capped at an hour. */
 const BASE_DELAY_SECONDS = 30;
 const MAX_DELAY_SECONDS = 3600;
+/** Retry delay after a permanent refusal: slow enough not to spin, fast enough to resume after a fix. */
+const PERMANENT_RETRY_SECONDS = 3600;
 /** Cloudflare's ceiling for a retry delay. */
 const MAX_QUEUE_DELAY_SECONDS = 43_200;
 /** After a permanent refusal, stop calling sv-be from this isolate for this long. */
@@ -21,16 +24,7 @@ export function resetConsumerState(): void {
 
 const LINE_TS_RE = /^\{"timestamp":"([^"]+)"/;
 
-export interface PreparedUpload {
-	gzip: Uint8Array;
-	sha256: string;
-	/** Base64 of the raw MD5 digest; sv-be needs it for providers that verify Content-MD5. */
-	contentMd5: string;
-	startTs: string;
-	endTs: string;
-}
-
-async function gzip(text: string): Promise<Uint8Array> {
+export async function gzip(text: string): Promise<Uint8Array> {
 	const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
 	return new Uint8Array(await new Response(stream).arrayBuffer());
 }
@@ -40,7 +34,10 @@ function hex(buf: ArrayBuffer): string {
 }
 
 /** Joins the messages' lines, gzips and hashes them (SHA-256 and MD5), and finds the time window. */
-export async function prepareUpload(bodies: QueueBody[], fallbackTs: number): Promise<PreparedUpload> {
+async function prepareUpload(
+	bodies: QueueBody[],
+	fallbackTs: number,
+): Promise<{ gzip: Uint8Array; meta: Omit<UploadRequest, "instance"> }> {
 	let min = Infinity;
 	let max = -Infinity;
 	for (const body of bodies) {
@@ -57,21 +54,22 @@ export async function prepareUpload(bodies: QueueBody[], fallbackTs: number): Pr
 	if (!Number.isFinite(min)) min = max = fallbackTs;
 	const data = await gzip(bodies.join(""));
 	const [sha, md5] = await Promise.all([crypto.subtle.digest("SHA-256", data), crypto.subtle.digest("MD5", data)]);
-	const sha256 = hex(sha);
-	const contentMd5 = btoa(String.fromCharCode(...new Uint8Array(md5)));
-	return { gzip: data, sha256, contentMd5, startTs: new Date(min).toISOString(), endTs: new Date(max).toISOString() };
+	return {
+		gzip: data,
+		meta: {
+			startTs: new Date(min).toISOString(),
+			endTs: new Date(max).toISOString(),
+			size: data.byteLength,
+			sha256: hex(sha),
+			// sv-be needs it for providers that verify Content-MD5 instead of SHA-256.
+			contentMd5: btoa(String.fromCharCode(...new Uint8Array(md5))),
+		},
+	};
 }
 
 function backoffSeconds(attempts: number, retryAfter?: number): number {
 	const exp = Math.min(BASE_DELAY_SECONDS * 2 ** Math.max(0, attempts - 1), MAX_DELAY_SECONDS);
 	return Math.min(Math.max(exp, retryAfter ?? 0), MAX_QUEUE_DELAY_SECONDS);
-}
-
-function log(level: "info" | "warn" | "error", event: string, fields: Record<string, unknown>): void {
-	const entry = JSON.stringify({ level, event, ...fields });
-	if (level === "error") console.error(entry);
-	else if (level === "warn") console.warn(entry);
-	else console.log(entry);
 }
 
 export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promise<void> {
@@ -94,7 +92,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 	const now = Date.now();
 	if (blocked && blocked.until > now) {
 		log("error", "upload_blocked", { queue: batch.queue, reason: blocked.reason, messages: valid.length, attempts });
-		retry(MAX_DELAY_SECONDS);
+		retry(PERMANENT_RETRY_SECONDS);
 		return;
 	}
 
@@ -108,18 +106,8 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 			throw new PermanentError("misconfigured", `SV_INSTANCE ${JSON.stringify(instance)} must match [A-Za-z0-9._-]{1,63}`);
 		}
 		const earliest = Math.min(...valid.map((m) => m.timestamp.getTime()));
-		const upload = await prepareUpload(
-			valid.map((m) => m.body as string),
-			Number.isFinite(earliest) ? earliest : now,
-		);
-		const request = {
-			instance,
-			startTs: upload.startTs,
-			endTs: upload.endTs,
-			size: upload.gzip.byteLength,
-			sha256: upload.sha256,
-			contentMd5: upload.contentMd5,
-		};
+		const upload = await prepareUpload(valid.map((m) => m.body as string), earliest);
+		const request: UploadRequest = { instance, ...upload.meta };
 		for (let refusals = 0; ; ) {
 			const target = await requestUpload(cfg, request);
 			const outcome = await putObject(target, upload.gzip);
@@ -139,7 +127,7 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 			// land in the dead-letter queue once max_retries is spent.
 			blocked = { until: now + PERMANENT_COOLDOWN_MS, reason: err.code };
 			log("error", "upload_refused_permanently", { code: err.code, error: err.message, messages: valid.length, attempts });
-			retry(MAX_DELAY_SECONDS);
+			retry(PERMANENT_RETRY_SECONDS);
 			return;
 		}
 		const delay = backoffSeconds(attempts, err instanceof TransientError ? err.retryAfterSeconds : undefined);

@@ -1,7 +1,7 @@
 import { checkBasicAuth } from "./auth";
 import { enqueueLines } from "./batching";
-import { BodyError, readBody } from "./body";
-import { BulkRequestError, bulkResponse, parseBulk } from "./bulk";
+import { readBody } from "./body";
+import { bulkResponse, parseBulk } from "./bulk";
 import { handleQueue } from "./consumer";
 import {
 	DEFAULT_MAX_BODY_BYTES,
@@ -10,7 +10,8 @@ import {
 	MIN_PASSWORD_LENGTH,
 	type Env,
 } from "./env";
-import { errorResponse, json, versionDocument } from "./opensearch";
+import { log } from "./log";
+import { errorResponse, json, RequestError, versionDocument } from "./opensearch";
 
 const BULK_PATH_RE = /^\/(?:([^/_][^/]*)\/)?_bulk\/?$/;
 const WWW_AUTHENTICATE = { "www-authenticate": 'Basic realm="streamvessel", charset="UTF-8"' };
@@ -19,7 +20,7 @@ function logRequest(request: Request): void {
 	const headers: Record<string, string> = {};
 	for (const [k, v] of request.headers) headers[k] = k === "authorization" ? "[redacted]" : v;
 	const url = new URL(request.url);
-	console.log(JSON.stringify({ event: "request", method: request.method, path: url.pathname, query: url.search, headers }));
+	log("info", "request", { method: request.method, path: url.pathname, query: url.search, headers });
 }
 
 async function limited(limiter: RateLimit | undefined, key: string): Promise<boolean> {
@@ -31,22 +32,16 @@ async function limited(limiter: RateLimit | undefined, key: string): Promise<boo
 async function handleBulk(request: Request, env: Env, pathIndex: string | undefined): Promise<Response> {
 	const started = Date.now();
 	let body: string;
+	let items;
 	try {
 		body = await readBody(
 			request,
 			intVar(env.MAX_BODY_BYTES, DEFAULT_MAX_BODY_BYTES),
 			intVar(env.MAX_DECOMPRESSED_BYTES, DEFAULT_MAX_DECOMPRESSED_BYTES),
 		);
-	} catch (err) {
-		if (err instanceof BodyError) return errorResponse(err.status, err.type, err.message);
-		throw err;
-	}
-
-	let items;
-	try {
 		items = parseBulk(body, pathIndex, started);
 	} catch (err) {
-		if (err instanceof BulkRequestError) return errorResponse(400, err.type, err.message);
+		if (err instanceof RequestError) return errorResponse(err.status, err.type, err.message);
 		throw err;
 	}
 
@@ -57,14 +52,14 @@ async function handleBulk(request: Request, env: Env, pathIndex: string | undefi
 		} catch (err) {
 			// Nothing is acknowledged unless everything is queued; the sender retries
 			// the whole request, so lines from earlier sendBatch calls may repeat.
-			console.error(JSON.stringify({ level: "error", event: "enqueue_failed", error: String(err), lines: lines.length }));
+			log("error", "enqueue_failed", { error: String(err), lines: lines.length });
 			return errorResponse(503, "unavailable_shards_exception", "could not queue the documents; retry", {
 				"retry-after": "5",
 			});
 		}
 	}
 	if (env.DEBUG_LOG_REQUESTS === "true") {
-		console.log(JSON.stringify({ event: "bulk", index: pathIndex, items: items.length, queued: lines.length, bytes: body.length }));
+		log("info", "bulk", { index: pathIndex, items: items.length, queued: lines.length, bytes: body.length });
 	}
 	return json(bulkResponse(items, Date.now() - started));
 }
@@ -78,7 +73,7 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 	}
 	if (!env.BULK_PASSWORD || env.BULK_PASSWORD.length < MIN_PASSWORD_LENGTH) {
 		// Fail closed: never run open, or behind a guessable password.
-		console.error(JSON.stringify({ level: "error", event: "misconfigured", error: `BULK_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters` }));
+		log("error", "misconfigured", { error: `BULK_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters` });
 		return errorResponse(500, "exception", "receiver is not configured");
 	}
 	if (!(await checkBasicAuth(request.headers.get("authorization"), env.BULK_USER, env.BULK_PASSWORD))) {
@@ -114,5 +109,5 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 
 export default {
 	fetch: handleFetch,
-	queue: (batch, env) => handleQueue(batch, env),
+	queue: handleQueue,
 } satisfies ExportedHandler<Env, unknown>;

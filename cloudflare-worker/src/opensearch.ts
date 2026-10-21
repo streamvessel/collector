@@ -1,6 +1,17 @@
 /** OpenSearch-shaped responses, so stock clients (App Platform, Fluent Bit, Vector) accept them. */
 
-export const VERSION_NUMBER = "2.11.0";
+const VERSION_NUMBER = "2.11.0";
+
+/** A request the receiver refuses as a whole, answered as an OpenSearch error. */
+export class RequestError extends Error {
+	constructor(
+		readonly status: number,
+		readonly type: string,
+		message: string,
+	) {
+		super(message);
+	}
+}
 
 export function json(body: unknown, status = 200, headers: HeadersInit = {}): Response {
 	return new Response(JSON.stringify(body), {

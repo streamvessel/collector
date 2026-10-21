@@ -56,10 +56,9 @@ export function groupBatches(messages: QueueBody[]): QueueBody[][] {
 }
 
 /** Sends lines to the queue; resolves only once every sendBatch has succeeded. */
-export async function enqueueLines(queue: Queue<QueueBody>, lines: string[]): Promise<number> {
+export async function enqueueLines(queue: Queue<QueueBody>, lines: string[]): Promise<void> {
 	const batches = groupBatches(packMessages(lines));
 	for (const batch of batches) {
 		await queue.sendBatch(batch.map((body) => ({ body, contentType: "text" as const })));
 	}
-	return batches.length;
 }

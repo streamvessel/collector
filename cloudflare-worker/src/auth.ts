@@ -5,7 +5,7 @@ const encoder = new TextEncoder();
  * lengths: both sides are hashed first so timingSafeEqual sees equal-length
  * inputs, and the hash hides the secret's length.
  */
-export async function constantTimeEqual(a: string, b: string): Promise<boolean> {
+async function constantTimeEqual(a: string, b: string): Promise<boolean> {
 	const [ha, hb] = await Promise.all([
 		crypto.subtle.digest("SHA-256", encoder.encode(a)),
 		crypto.subtle.digest("SHA-256", encoder.encode(b)),
@@ -13,12 +13,12 @@ export async function constantTimeEqual(a: string, b: string): Promise<boolean> 
 	return crypto.subtle.timingSafeEqual(ha, hb);
 }
 
-export interface BasicCredentials {
+interface BasicCredentials {
 	user: string;
 	password: string;
 }
 
-export function parseBasicAuth(header: string | null): BasicCredentials | null {
+function parseBasicAuth(header: string | null): BasicCredentials | null {
 	if (!header) return null;
 	const match = /^Basic\s+([A-Za-z0-9+/=]+)\s*$/i.exec(header);
 	if (!match) return null;
