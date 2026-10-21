@@ -149,12 +149,14 @@ export async function requestUpload(cfg: SvConfig, req: UploadRequest): Promise<
 type PutOutcome = "stored" | "exists" | "url_refused";
 
 /**
- * PUTs the object with exactly the headers sv-be signed and never an
- * Authorization header: the bucket would refuse it beside the signature, and
- * it would hand our token to the storage provider.
+ * PUTs the object with exactly the headers sv-be signed, plus Content-Type,
+ * and never an Authorization header: the bucket would refuse it beside the
+ * signature, and it would hand our token to the storage provider.
  */
 export async function putObject(target: UploadTarget, body: Uint8Array): Promise<PutOutcome> {
-	const headers = new Headers();
+	// Not signed by sv-be, so ours to set. No Content-Encoding: the object is a
+	// .log.gz file, and the log viewer gunzips it itself.
+	const headers = new Headers({ "content-type": "application/gzip" });
 	for (const [k, v] of Object.entries(target.headers)) {
 		if (k.toLowerCase() !== "authorization") headers.set(k, v);
 	}

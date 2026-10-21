@@ -111,6 +111,22 @@ describe("queue consumer", () => {
 		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("invalid_instance"));
 	});
 
+	it("sends Content-Type: application/gzip and no Authorization or Content-Encoding on every PUT", async () => {
+		await run([line("2026-10-20T12:00:00.000Z", "aws")]);
+		sv.provider = "other";
+		await run([line("2026-10-20T12:00:01.000Z", "other")]);
+		let refusals = 1;
+		sv.onPut = () => (refusals-- > 0 ? new Response(null, { status: 403 }) : undefined);
+		await run([line("2026-10-20T12:00:02.000Z", "retried")]);
+
+		expect(sv.putCalls).toHaveLength(4);
+		for (const put of sv.putCalls) {
+			expect(put.headers["content-type"]).toBe("application/gzip");
+			expect(put.headers.authorization).toBeUndefined();
+			expect(put.headers["content-encoding"]).toBeUndefined();
+		}
+	});
+
 	it("never forwards an Authorization header even if sv-be lists one", async () => {
 		sv.onUpload = undefined;
 		const orig = sv.fetch;

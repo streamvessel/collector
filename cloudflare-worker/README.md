@@ -279,8 +279,8 @@ Cloudflare's limits: 128 KB per message, and 100 messages or 256 KB per send.
 2. Gets an access token from StreamVessel (OAuth 2.0 client credentials,
    reused until it expires).
 3. Asks StreamVessel for a short-lived upload link for that file.
-4. Uploads the file straight to your bucket. Your StreamVessel token is never
-   sent to the bucket.
+4. Uploads the file straight to your bucket as `application/gzip`. Your
+   StreamVessel token is never sent to the bucket.
 
 The StreamVessel side is described in `docs/design-notes/log-ingest.md` in
 sv-be (added in [sv-be#386](https://github.com/streamvessel/sv-be/pull/386)).
