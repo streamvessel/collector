@@ -152,12 +152,10 @@ func (e *svExporter) pushLogs(ctx context.Context, ld plog.Logs) error {
 
 func (e *svExporter) upload(ctx context.Context, b *batch) error {
 	req := uploadRequest{
-		Instance:   e.instance,
-		StartTs:    formatTime(b.start),
-		EndTs:      formatTime(b.end),
-		Size:       int64(len(b.body)),
-		SHA256:     b.sha256,
-		ContentMD5: b.md5,
+		Instance: e.instance,
+		StartTs:  formatTime(b.start),
+		EndTs:    formatTime(b.end),
+		SHA256:   b.sha256,
 	}
 	for forbidden := 0; ; {
 		t, err := e.sv.presign(ctx, req)
@@ -267,6 +265,8 @@ func (e *svExporter) putBatch(ctx context.Context, t *target, b *batch) putResul
 		return putResult{err: err}
 	}
 	req.ContentLength = int64(len(b.body))
+	// Not signed, so ours to set; a presigned header of the same name wins.
+	req.Header.Set("Content-Type", "application/gzip")
 	for k, v := range t.Headers {
 		switch http.CanonicalHeaderKey(k) {
 		case "Content-Length":

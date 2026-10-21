@@ -29,7 +29,7 @@ filelog / otlp → memory_limiter → resourcedetection → sv exporter
 
 There is no batch processor: batching happens in the exporter's queue after the records are on disk, so a crash loses nothing the receivers handed over. `retry_on_failure.max_elapsed_time` is 0, so a batch is retried until it lands. The binary turns on the `stanza.synchronousLogEmitter` feature gate, so filelog does not save a read offset before the records reach the queue.
 
-Authentication is the stock `oauth2client` extension (client credentials grant against `${SV_SERVER}/be/ingest/oauth/token`); the agent has no auth code of its own. The secret is always read from a file (`client_secret_file`), which the extension re-reads, so rotating it needs no restart. Each batch is announced with `POST /be/ingest/uploads {instance, startTs, endTs, size, sha256, contentMd5}` (contract: streamvessel/sv-be#386). The PUT to the bucket goes through a separate plain HTTP client with no `Authorization` header and exactly the headers sv-be returned.
+Authentication is the stock `oauth2client` extension (client credentials grant against `${SV_SERVER}/be/ingest/oauth/token`); the agent has no auth code of its own. The secret is always read from a file (`client_secret_file`), which the extension re-reads, so rotating it needs no restart. Each batch is announced with `POST /be/ingest/uploads {instance, startTs, endTs, sha256}` (contract: streamvessel/sv-be#386). The PUT to the bucket goes through a separate plain HTTP client with no `Authorization` header and exactly the headers sv-be returned.
 
 ### NDJSON record
 

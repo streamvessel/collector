@@ -17,7 +17,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -198,26 +197,24 @@ func (s *server) uploads(w http.ResponseWriter, r *http.Request) {
 		Instance string `json:"instance"`
 		StartTs  string `json:"startTs"`
 		EndTs    string `json:"endTs"`
-		Size     int64  `json:"size"`
 		SHA256   string `json:"sha256"`
-		MD5      string `json:"contentMd5"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
 		return
 	}
-	sum, err := hex.DecodeString(req.SHA256)
+	sum, err := hex.DecodeString(req.SHA256) // names the file; nothing is signed with it
 	start, err1 := time.Parse(time.RFC3339Nano, req.StartTs)
 	end, err2 := time.Parse(time.RFC3339Nano, req.EndTs)
 	if !instanceRe.MatchString(req.Instance) || req.Instance == "." || req.Instance == ".." ||
-		err != nil || len(sum) != 32 || err1 != nil || err2 != nil || req.Size <= 0 || req.MD5 == "" {
+		err != nil || len(sum) != 32 || err1 != nil || err2 != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
 		return
 	}
 	const kf = "20060102T150405"
 	key := fmt.Sprintf("%s/agent/%s/%s/%sZ_%sZ_%s.log.gz", prefix, req.Instance, start.UTC().Format("20060102"),
 		start.UTC().Format(kf), end.UTC().Format(kf), req.SHA256[:8])
-	t, err := s.sign(r.Context(), key, &req.Size, base64.StdEncoding.EncodeToString(sum), 5*time.Minute)
+	t, err := s.sign(r.Context(), key, 5*time.Minute)
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
@@ -243,7 +240,7 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 		_, _ = rand.Read(id)
 		key := fmt.Sprintf("%s/agent/%s/%s/lease_%s_%s.log.gz", prefix, req.Instance, mint.Format("20060102"),
 			mint.Format("20060102T150405"), hex.EncodeToString(id))
-		t, err := s.sign(r.Context(), key, nil, "", time.Hour)
+		t, err := s.sign(r.Context(), key, time.Hour)
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
@@ -253,16 +250,12 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"slots": slots, "max": 8})
 }
 
-func (s *server) sign(ctx context.Context, key string, size *int64, checksum string, ttl time.Duration) (*target, error) {
+// sign presigns a PUT the way sv-be does on AWS: only if-none-match is signed.
+func (s *server) sign(ctx context.Context, key string, ttl time.Duration) (*target, error) {
 	in := &s3.PutObjectInput{
 		Bucket:      &bucket,
 		Key:         &key,
-		ContentType: aws.String("application/gzip"),
 		IfNoneMatch: aws.String("*"),
-	}
-	if size != nil {
-		in.ContentLength = size
-		in.ChecksumSHA256 = &checksum
 	}
 	req, err := s.presign.PresignPutObject(ctx, in, s3.WithPresignExpires(ttl))
 	if err != nil {

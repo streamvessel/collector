@@ -2,8 +2,6 @@ package svexporter
 
 import (
 	"context"
-	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -83,7 +81,7 @@ func (f *fakeSV) handleSV(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		key := fmt.Sprintf("p/agent/%s/%s_%s.log.gz", req.Instance, req.StartTs, req.SHA256[:8])
-		writeJSON(w, 200, f.sign(key, req.Size, req.SHA256))
+		writeJSON(w, 200, f.sign(key))
 	case "/be/ingest/leases":
 		f.leaseCalls++
 		if !f.authorized(w, r) {
@@ -97,7 +95,7 @@ func (f *fakeSV) handleSV(w http.ResponseWriter, r *http.Request) {
 		var slots []target
 		for i := range 8 {
 			key := fmt.Sprintf("p/agent/lease_%d_%d.log.gz", f.leaseCalls, i)
-			slots = append(slots, f.sign(key, -1, ""))
+			slots = append(slots, f.sign(key))
 		}
 		writeJSON(w, 200, leaseResponse{Slots: slots, Max: 8})
 	default:
@@ -140,16 +138,10 @@ func (f *fakeSV) authorized(w http.ResponseWriter, r *http.Request) bool {
 	return true
 }
 
-// sign returns a presigned target for key. size < 0 leaves size and checksum
-// unsigned, as for an offline slot.
-func (f *fakeSV) sign(key string, size int64, sha string) target {
-	// sv-be sends lowercase keys and leaves out Host.
-	h := map[string]string{"content-type": "application/gzip", "if-none-match": "*"}
-	if size >= 0 {
-		raw, _ := hex.DecodeString(sha)
-		h["content-length"] = fmt.Sprint(size)
-		h["x-amz-checksum-sha256"] = base64.StdEncoding.EncodeToString(raw)
-	}
+// sign returns a presigned target for key. Like sv-be, it signs only
+// if-none-match (AWS) and sends lowercase keys without Host.
+func (f *fakeSV) sign(key string) target {
+	h := map[string]string{"if-none-match": "*"}
 	f.signed[key] = h
 	return target{
 		URL:       f.storage.URL + "/bucket/" + key + "?X-Amz-Signature=abc",

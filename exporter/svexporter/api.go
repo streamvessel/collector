@@ -20,11 +20,9 @@ type uploadRequest struct {
 	Instance string `json:"instance"`
 	StartTs  string `json:"startTs"`
 	EndTs    string `json:"endTs"`
-	Size     int64  `json:"size"`
-	SHA256   string `json:"sha256"`
-	// ContentMD5 is base64 of the raw MD5 digest; every provider but AWS
-	// signs Content-MD5, so it is always sent.
-	ContentMD5 string `json:"contentMd5"`
+	// SHA256 is lowercase hex of the gzipped body; its first 8 characters
+	// name the object, so a re-sent batch maps to the same key.
+	SHA256 string `json:"sha256"`
 }
 
 // target is a presigned PUT: the answer to /uploads and one slot of /leases.
