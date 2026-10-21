@@ -104,6 +104,20 @@ describe("queue consumer", () => {
 		expect(sv.objects.size).toBe(1);
 	});
 
+	it("clamps the reported window around the queue time but leaves line timestamps alone", async () => {
+		// Messages were queued at 2026-10-20T12:00:00Z (see batchOf).
+		const bodies = [line("2026-09-01T00:00:00.000Z", "old clock") + line("2026-10-20T15:00:00.000Z", "fast clock")];
+		const r1 = await run(bodies);
+		expect(r1.explicitAcks).toEqual(["m0"]);
+		expect(sv.uploadCalls[0].body).toMatchObject({ startTs: "2026-10-13T12:00:00.000Z", endTs: "2026-10-20T12:01:00.000Z" });
+		const [obj] = [...sv.objects.values()];
+		expect(await gunzipText(obj.body)).toBe(bodies.join(""));
+
+		// A retry of the same batch asks for the same window, hence the same key.
+		await run(bodies);
+		expect(sv.uploadCalls[1].body).toEqual(sv.uploadCalls[0].body);
+	});
+
 	it("logs sv-be's error_description with a permanent refusal", async () => {
 		sv.onUpload = () =>
 			Response.json({ error: "invalid_request", error_description: "window starts more than 30 days ago" }, { status: 400 });

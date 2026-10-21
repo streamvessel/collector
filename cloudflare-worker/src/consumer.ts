@@ -23,6 +23,16 @@ export function resetConsumerState(): void {
 }
 
 const LINE_TS_RE = /^\{"timestamp":"([^"]+)"/;
+/**
+ * sv-be permanently refuses a window that starts over 30 days back or ends
+ * over 5 minutes ahead of its clock. The reported window is clamped to this
+ * range around when the batch's messages were queued: a pure function of the
+ * batch, so every retry asks for the same key, and inside sv-be's range even
+ * after the longest retry schedule plus 14 days in the dead-letter queue.
+ * Lines keep their own timestamps.
+ */
+const WINDOW_PAST_MS = 7 * 86_400_000;
+const WINDOW_FUTURE_MS = 60_000;
 
 export async function gzip(text: string): Promise<Uint8Array> {
 	const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
@@ -33,10 +43,14 @@ function hex(buf: ArrayBuffer): string {
 	return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Joins the messages' lines, gzips and hashes them, and finds the time window. */
+/**
+ * Joins the messages' lines, gzips and hashes them, and finds the time window,
+ * clamped to [firstQueued - 7 days, lastQueued + 1 minute].
+ */
 async function prepareUpload(
 	bodies: QueueBody[],
-	fallbackTs: number,
+	firstQueued: number,
+	lastQueued: number,
 ): Promise<{ gzip: Uint8Array; meta: Omit<UploadRequest, "instance"> }> {
 	let min = Infinity;
 	let max = -Infinity;
@@ -51,7 +65,10 @@ async function prepareUpload(
 			}
 		}
 	}
-	if (!Number.isFinite(min)) min = max = fallbackTs;
+	if (!Number.isFinite(min)) min = max = firstQueued;
+	const clamp = (t: number) => Math.min(Math.max(t, firstQueued - WINDOW_PAST_MS), lastQueued + WINDOW_FUTURE_MS);
+	min = clamp(min);
+	max = clamp(max);
 	const data = await gzip(bodies.join(""));
 	const sha = await crypto.subtle.digest("SHA-256", data);
 	return {
@@ -103,8 +120,12 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 		if (!INSTANCE_RE.test(instance) || instance === "." || instance === "..") {
 			throw new PermanentError("misconfigured", `SV_INSTANCE ${JSON.stringify(instance)} must match [A-Za-z0-9._-]{1,63}`);
 		}
-		const earliest = Math.min(...valid.map((m) => m.timestamp.getTime()));
-		const upload = await prepareUpload(valid.map((m) => m.body as string), earliest);
+		const queued = valid.map((m) => m.timestamp.getTime());
+		const upload = await prepareUpload(
+			valid.map((m) => m.body as string),
+			Math.min(...queued),
+			Math.max(...queued),
+		);
 		const request: UploadRequest = { instance, ...upload.meta };
 		for (let refusals = 0; ; ) {
 			const target = await requestUpload(cfg, request);

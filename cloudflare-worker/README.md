@@ -199,10 +199,11 @@ outages, raise both together: first the retention (up to 14 days on the
 Paid plan), then `max_retries` in `wrangler.toml` (at most 100). Every 24 extra
 retries need one more day of retention.
 
-StreamVessel refuses files whose logs are more than 30 days old. The Worker
-trusts a record's own time only if it is at most 7 days old when it arrives,
-so even the longest retry schedule and a full 14 days in the dead-letter
-queue stay inside that limit.
+StreamVessel refuses a file whose time window starts more than 30 days back.
+The window the Worker reports (and that names the file) is limited to 7 days
+before the logs arrived, so even the longest retry schedule and a full 14 days
+in the dead-letter queue stay inside that limit. Each log line keeps its own
+time, even if the sending app's clock was off.
 
 ```sh
 npx wrangler queues update sv-logs --message-retention-period-secs 1209600
@@ -280,7 +281,7 @@ Each log record becomes one line with these fields:
 
 | Field | Taken from (first one present) |
 |---|---|
-| `timestamp` | `@timestamp`, `timestamp`, `time`, `ts`, `datetime`, `date`, if it is between 7 days before and 1 minute after the record arrived; otherwise the time it arrived (the original is kept as `attrs.timestamp_raw`) |
+| `timestamp` | `@timestamp`, `timestamp`, `time`, `ts`, `datetime`, `date`; if missing or not a real log time (before 2000, or over a day ahead), the time it arrived, with the original kept as `attrs.timestamp_raw` |
 | `level` | `level`, `severity`, `log.level`, `levelname`, `loglevel`, `severity_text` |
 | `message` | `message`, `msg`, `log`, `text` |
 | `attrs` | every other field, such as App Platform's app and component names |

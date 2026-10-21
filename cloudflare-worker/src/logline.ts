@@ -13,14 +13,13 @@ export const MAX_LINE_BYTES = 100_000;
 /** A level is a short word; anything longer is cut so it cannot crowd out the message. */
 const MAX_LEVEL_LENGTH = 32;
 /**
- * A record's own time is trusted only from 7 days before to 1 minute after it
- * arrived; anything else (durations, numbers like 20261020, a skewed clock)
- * falls back to the arrival time. sv-be refuses a whole batch, permanently,
- * whose window starts over 30 days back or ends over 5 minutes ahead of its
- * clock, so this keeps every batch inside that even after days of retries.
+ * Values outside these bounds are not log times (durations, numbers like
+ * 20261020), so the arrival time is used instead. A merely skewed clock is
+ * kept as it is: the viewer places lines by their own time. The consumer
+ * clamps the batch window it reports to sv-be separately.
  */
-const MAX_PAST_MS = 7 * 86_400_000;
-const MAX_FUTURE_MS = 60_000;
+const EARLIEST_TS = Date.UTC(2000, 0, 1);
+const MAX_FUTURE_MS = 86_400_000;
 
 const encoder = new TextEncoder();
 
@@ -73,7 +72,7 @@ export function toLogLine(doc: Record<string, unknown>, index: string | undefine
 	const rawLevel = takeFirst(rest, LEVEL_FIELDS);
 
 	let ts = rawTs === undefined ? null : parseTimestamp(rawTs);
-	if (ts !== null && (ts < receivedAt - MAX_PAST_MS || ts > receivedAt + MAX_FUTURE_MS)) ts = null;
+	if (ts !== null && (ts < EARLIEST_TS || ts > receivedAt + MAX_FUTURE_MS)) ts = null;
 	if (ts === null) {
 		if (rawTs !== undefined) rest["timestamp_raw"] = rawTs;
 		ts = receivedAt;
