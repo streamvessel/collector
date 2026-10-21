@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { MAX_BATCH_BYTES, MAX_BATCH_MESSAGES, MAX_MESSAGE_BYTES, type QueueBody } from "../src/batching";
 import { gzip } from "../src/consumer";
 import type { Env } from "../src/env";
@@ -138,6 +138,12 @@ describe("GET /", () => {
 
 describe("POST _bulk", () => {
 	it("maps documents to NDJSON lines, queues them, then answers a bulk response", async () => {
+		// Record times are trusted only near the arrival time, so pin "now" next to them.
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-10-20T12:30:00Z"));
+		onTestFinished(() => {
+			vi.useRealTimers();
+		});
 		const { env, queue } = makeEnv();
 		const body =
 			`{"index":{"_index":"app-logs","_id":"a1"}}\n` +

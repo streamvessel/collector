@@ -168,8 +168,10 @@ or **Workers Logs** in the Cloudflare dashboard).
 | `upload_refused_permanently` with `invalid_client` | Client id or secret is wrong, deleted, or the agent was revoked | Check the agent in StreamVessel and update the secrets |
 | `upload_refused_permanently` with `agent_revoked` or `scope_changed` | The agent was revoked, or its bucket connection no longer reaches its folder | Check the agent and its connection in StreamVessel; if revoked, create a new agent and update the secrets |
 | `upload_refused_permanently` with `too_many_instances` | The agent already has 50 instance folders | Reuse an existing `SV_INSTANCE`, or use another agent |
-| `upload_refused_permanently` with `connection_unreadable` | StreamVessel can no longer use the agent's bucket connection (for example, its keys changed) | Fix the connection in StreamVessel |
-| `upload_failed` | StreamVessel or the bucket is unreachable for now (including `storage_unavailable` and `rate_limited`) | Nothing; the Worker keeps retrying |
+| `upload_refused_permanently` with `connection_unreadable` | StreamVessel can no longer read the agent's bucket connection | Fix or recreate the connection in StreamVessel |
+| `upload_refused_permanently` with `not_found` | Log agents are not turned on in this StreamVessel, or `SV_SERVER` is wrong | Check `SV_SERVER`; ask StreamVessel support |
+| `upload_refused_permanently` with `invalid_request` or `invalid_instance` | StreamVessel refused the request; the log line says why | Fix what it names (for `invalid_instance`, `SV_INSTANCE`) |
+| `upload_failed` | StreamVessel or the bucket is unreachable or busy for now (including `storage_unavailable`, and `rate_limited` above 120 uploads a minute per instance) | Nothing; the Worker keeps retrying |
 | `uploaded` | A file was written | All good |
 
 After a permanent error, the Worker retries each batch once an hour instead
@@ -196,6 +198,11 @@ the dead-letter queue before Cloudflare would delete it. To cover longer
 outages, raise both together: first the retention (up to 14 days on the
 Paid plan), then `max_retries` in `wrangler.toml` (at most 100). Every 24 extra
 retries need one more day of retention.
+
+StreamVessel refuses files whose logs are more than 30 days old. The Worker
+trusts a record's own time only if it is at most 7 days old when it arrives,
+so even the longest retry schedule and a full 14 days in the dead-letter
+queue stay inside that limit.
 
 ```sh
 npx wrangler queues update sv-logs --message-retention-period-secs 1209600
@@ -273,7 +280,7 @@ Each log record becomes one line with these fields:
 
 | Field | Taken from (first one present) |
 |---|---|
-| `timestamp` | `@timestamp`, `timestamp`, `time`, `ts`, `datetime`, `date`; otherwise the time it arrived |
+| `timestamp` | `@timestamp`, `timestamp`, `time`, `ts`, `datetime`, `date`, if it is between 7 days before and 1 minute after the record arrived; otherwise the time it arrived (the original is kept as `attrs.timestamp_raw`) |
 | `level` | `level`, `severity`, `log.level`, `levelname`, `loglevel`, `severity_text` |
 | `message` | `message`, `msg`, `log`, `text` |
 | `attrs` | every other field, such as App Platform's app and component names |

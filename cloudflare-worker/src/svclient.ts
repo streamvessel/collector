@@ -65,22 +65,27 @@ function retryAfter(res: Response): number | undefined {
 	return Number.isFinite(date) ? Math.max(0, Math.ceil((date - Date.now()) / 1000)) : undefined;
 }
 
-async function errorCode(res: Response): Promise<string> {
+/** sv-be's `{error, error_description}`; the description is kept for the logs. */
+async function errorBody(res: Response): Promise<{ code: string; description: string }> {
 	try {
-		const body = (await res.json()) as { error?: unknown };
-		return typeof body.error === "string" ? body.error : `http_${res.status}`;
+		const body = (await res.json()) as { error?: unknown; error_description?: unknown };
+		return {
+			code: typeof body.error === "string" ? body.error : `http_${res.status}`,
+			description: typeof body.error_description === "string" ? body.error_description : "",
+		};
 	} catch {
-		return `http_${res.status}`;
+		return { code: `http_${res.status}`, description: "" };
 	}
 }
 
 /** Classifies an sv-be error response. */
 async function failure(what: string, res: Response): Promise<Error> {
-	const code = await errorCode(res);
+	const { code, description } = await errorBody(res);
+	const message = `${what}: HTTP ${res.status} ${code}${description ? ` (${description})` : ""}`;
 	if (res.status === 429 || res.status === 408 || res.status >= 500) {
-		return new TransientError(`${what}: HTTP ${res.status} ${code}`, retryAfter(res));
+		return new TransientError(message, retryAfter(res));
 	}
-	return new PermanentError(code, `${what}: HTTP ${res.status} ${code}`);
+	return new PermanentError(code, message);
 }
 
 async function send(what: string, input: string, init: RequestInit): Promise<Response> {
@@ -132,7 +137,7 @@ export async function requestUpload(cfg: SvConfig, req: UploadRequest): Promise<
 			resetTokenCache();
 			continue;
 		}
-		if (res.status === 401) throw new TransientError(`upload request: HTTP 401 ${await errorCode(res)}`);
+		if (res.status === 401) throw new TransientError(`upload request: HTTP 401 ${(await errorBody(res)).code}`);
 		if (!res.ok) throw await failure("upload request", res);
 		const body = (await res.json()) as Partial<UploadTarget>;
 		if (typeof body.url !== "string" || typeof body.key !== "string") {

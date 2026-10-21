@@ -104,6 +104,14 @@ describe("queue consumer", () => {
 		expect(sv.objects.size).toBe(1);
 	});
 
+	it("logs sv-be's error_description with a permanent refusal", async () => {
+		sv.onUpload = () =>
+			Response.json({ error: "invalid_request", error_description: "window starts more than 30 days ago" }, { status: 400 });
+		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
+		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("window starts more than 30 days ago"));
+	});
+
 	it("treats 400 invalid_instance as permanent", async () => {
 		sv.onUpload = () => Response.json({ error: "invalid_instance" }, { status: 400 });
 		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
