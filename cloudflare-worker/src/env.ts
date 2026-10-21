@@ -38,6 +38,8 @@ export const DEFAULT_INSTANCE = "cf-worker";
 export const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024;
 export const DEFAULT_MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024;
 export const MIN_PASSWORD_LENGTH = 16;
+/** Matches placeholder values such as REPLACE_ME or change-me, which must never be used as secrets. */
+export const PLACEHOLDER_RE = /replace[-_ ]?me|change[-_ ]?me/i;
 
 export function intVar(value: string | undefined, fallback: number): number {
 	if (value === undefined || value.trim() === "") return fallback;

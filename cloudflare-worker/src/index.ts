@@ -8,6 +8,7 @@ import {
 	DEFAULT_MAX_DECOMPRESSED_BYTES,
 	intVar,
 	MIN_PASSWORD_LENGTH,
+	PLACEHOLDER_RE,
 	type Env,
 } from "./env";
 import { log } from "./log";
@@ -71,9 +72,11 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 	if (await limited(env.REQUEST_LIMITER, ip)) {
 		return errorResponse(429, "es_rejected_execution_exception", "rate limit exceeded", { "retry-after": "10" });
 	}
-	if (!env.BULK_PASSWORD || env.BULK_PASSWORD.length < MIN_PASSWORD_LENGTH) {
-		// Fail closed: never run open, or behind a guessable password.
-		log("error", "misconfigured", { error: `BULK_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters` });
+	if (!env.BULK_PASSWORD || env.BULK_PASSWORD.length < MIN_PASSWORD_LENGTH || PLACEHOLDER_RE.test(env.BULK_PASSWORD)) {
+		// Fail closed: never run open, or behind a guessable or published placeholder password.
+		log("error", "misconfigured", {
+			error: `BULK_PASSWORD must be a real password of at least ${MIN_PASSWORD_LENGTH} characters`,
+		});
 		return errorResponse(500, "exception", "receiver is not configured");
 	}
 	if (!(await checkBasicAuth(request.headers.get("authorization"), env.BULK_USER, env.BULK_PASSWORD))) {

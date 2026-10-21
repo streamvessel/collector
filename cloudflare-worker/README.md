@@ -64,7 +64,9 @@ Cloudflare then:
 1. asks you to log in, and copies this Worker into a new repository in your
    GitHub or GitLab account;
 2. creates the two queues, `sv-logs` and `sv-logs-dlq`;
-3. asks for three secrets:
+3. asks for three secrets. The fields come prefilled with the placeholder
+   `REPLACE_ME` (shown as dots, because they are secrets). **Clear each field
+   and enter the real value**; the Worker refuses to run with a placeholder.
 
    | Secret | Value |
    |---|---|
@@ -162,7 +164,8 @@ or **Workers Logs** in the Cloudflare dashboard).
 | You see | Meaning | What to do |
 |---|---|---|
 | `401` from the Worker | Wrong user or password | Check the App Platform destination matches `BULK_PASSWORD` |
-| `500` "receiver is not configured" | `BULK_PASSWORD` is missing or shorter than 16 characters | Run `wrangler secret put BULK_PASSWORD` again |
+| `500` "receiver is not configured" | `BULK_PASSWORD` is missing, shorter than 16 characters, or still the `REPLACE_ME` placeholder | Set a real password (Cloudflare dashboard → your Worker → **Settings → Variables and Secrets**, or `wrangler secret put BULK_PASSWORD`) |
+| `upload_refused_permanently` with `misconfigured` | `SV_CLIENT_ID` or `SV_CLIENT_SECRET` is still the placeholder, or a setting is invalid | Set the agent's real client id and secret |
 | `413` from the Worker | Request larger than 8 MiB | Have the sender send smaller batches. Raising `MAX_BODY_BYTES` / `MAX_DECOMPRESSED_BYTES` risks the Worker's 128 MB memory limit |
 | `429` from the Worker | Rate limit reached | Raise the limits in `wrangler.toml` |
 | `upload_refused_permanently` with `invalid_client` | Client id or secret is wrong, deleted, or the agent was revoked | Check the agent in StreamVessel and update the secrets |

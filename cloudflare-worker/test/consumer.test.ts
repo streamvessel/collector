@@ -266,6 +266,16 @@ describe("queue consumer", () => {
 		expect(sv.uploadCalls).toHaveLength(1);
 	});
 
+	it("refuses placeholder credentials without calling sv-be", async () => {
+		for (const overrides of [{ SV_CLIENT_ID: "REPLACE_ME" }, { SV_CLIENT_SECRET: "REPLACE_ME" }]) {
+			resetConsumerState();
+			const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv(overrides));
+			expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+		}
+		expect(sv.tokenCalls).toHaveLength(0);
+		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("placeholders"));
+	});
+
 	it("treats a bad SV_INSTANCE as permanent configuration error", async () => {
 		const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv({ SV_INSTANCE: "../evil" }));
 		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);

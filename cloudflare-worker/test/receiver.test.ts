@@ -85,8 +85,8 @@ describe("authentication", () => {
 		spy.mockRestore();
 	});
 
-	it("fails closed when BULK_PASSWORD is unset or short", async () => {
-		for (const pw of ["", "short"]) {
+	it("fails closed when BULK_PASSWORD is unset, short or a placeholder", async () => {
+		for (const pw of ["", "short", "REPLACE_ME", "REPLACE_ME-padded-to-be-long-enough", "change-me-to-a-long-random-value"]) {
 			const { env } = makeEnv({ BULK_PASSWORD: pw });
 			const res = await handleFetch(new Request("https://worker.test/", { headers: { authorization: basic("streamvessel", pw) } }), env);
 			expect(res.status).toBe(500);

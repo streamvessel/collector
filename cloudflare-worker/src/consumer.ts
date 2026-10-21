@@ -1,5 +1,5 @@
 import type { QueueBody } from "./batching";
-import { DEFAULT_INSTANCE, type Env } from "./env";
+import { DEFAULT_INSTANCE, PLACEHOLDER_RE, type Env } from "./env";
 import { log } from "./log";
 import { PermanentError, putObject, requestUpload, TransientError, type SvConfig, type UploadRequest } from "./svclient";
 
@@ -116,6 +116,9 @@ export async function handleQueue(batch: MessageBatch<unknown>, env: Env): Promi
 	try {
 		if (!cfg.server || !cfg.clientId || !cfg.clientSecret) {
 			throw new PermanentError("misconfigured", "SV_SERVER, SV_CLIENT_ID and SV_CLIENT_SECRET must be set");
+		}
+		if (!cfg.clientId.startsWith("sva_") || PLACEHOLDER_RE.test(cfg.clientId) || PLACEHOLDER_RE.test(cfg.clientSecret)) {
+			throw new PermanentError("misconfigured", "SV_CLIENT_ID / SV_CLIENT_SECRET are still placeholders; set the agent's real values");
 		}
 		if (!INSTANCE_RE.test(instance) || instance === "." || instance === "..") {
 			throw new PermanentError("misconfigured", `SV_INSTANCE ${JSON.stringify(instance)} must match [A-Za-z0-9._-]{1,63}`);
