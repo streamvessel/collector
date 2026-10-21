@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ func encodeBatch(ld plog.Logs, fallbackHost string, now time.Time) (*batch, erro
 				if b.records == 0 || rt.After(b.end) {
 					b.end = rt
 				}
-				if err := enc.Encode(toLine(lr, ts, host)); err != nil {
+				if err := encodeLine(enc, toLine(lr, ts, host)); err != nil {
 					return nil, err
 				}
 				b.records++
@@ -143,6 +144,22 @@ func clampTime(t, lo, hi time.Time) time.Time {
 		return hi
 	}
 	return t
+}
+
+// encodeLine writes one NDJSON line. JSON has no NaN or Infinity, so if an
+// attribute holds one, those attributes are written as strings instead of
+// failing the whole batch. Encode writes nothing when it fails.
+func encodeLine(enc *json.Encoder, l line) error {
+	err := enc.Encode(l)
+	if err == nil {
+		return nil
+	}
+	for k, v := range l.Attrs {
+		if _, e := json.Marshal(v); e != nil {
+			l.Attrs[k] = fmt.Sprint(v)
+		}
+	}
+	return enc.Encode(l)
 }
 
 func toLine(lr plog.LogRecord, ts time.Time, host string) line {

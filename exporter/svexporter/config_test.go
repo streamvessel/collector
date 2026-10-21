@@ -49,6 +49,8 @@ func TestLoadConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, cfg.OfflineSlots.PoolSize)
 	assert.Equal(t, 10*time.Second, cfg.QueueConfig.Get().Batch.Get().FlushTimeout)
+	assert.Equal(t, 10*time.Second, cfg.ClientConfig.Timeout, "timeout is the sv-be client's")
+	assert.Equal(t, 5*time.Minute, cfg.ExportTimeout, "export_timeout is separate")
 
 	_, err = loadConfig(t, "sv/bad_instance")
 	assert.ErrorContains(t, err, "instance")

@@ -24,8 +24,9 @@ type Config struct {
 	// oauth2client extension. It is never used for the PUT to the bucket.
 	ClientConfig confighttp.ClientConfig `mapstructure:",squash"`
 
-	// TimeoutConfig bounds one export attempt: presign plus PUT.
-	TimeoutConfig exporterhelper.TimeoutConfig `mapstructure:",squash"`
+	// ExportTimeout bounds one export attempt: presign plus PUT. (timeout is
+	// the sv-be HTTP client's, from ClientConfig.)
+	ExportTimeout time.Duration `mapstructure:"export_timeout"`
 
 	// QueueConfig is the persistent sending queue. Batching happens here,
 	// after persistence, so nothing the receivers handed over is lost on a crash.
@@ -91,6 +92,9 @@ func (cfg *Config) Validate() error {
 	}
 	if cfg.Instance != "" && !validInstance(cfg.Instance) {
 		errs = append(errs, fmt.Errorf("instance %q must match [A-Za-z0-9._-]{1,63} and must not be \".\" or \"..\"", cfg.Instance))
+	}
+	if cfg.ExportTimeout <= 0 {
+		errs = append(errs, errors.New("export_timeout must be positive"))
 	}
 	if cfg.Upload.Timeout <= 0 {
 		errs = append(errs, errors.New("upload.timeout must be positive"))

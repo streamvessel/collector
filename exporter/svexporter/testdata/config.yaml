@@ -7,6 +7,8 @@ sv:
     storage: file_storage
 sv/custom:
   endpoint: https://sv.example/be/ingest
+  timeout: 10s
+  export_timeout: 5m
   auth:
     authenticator: oauth2client
   offline_slots:

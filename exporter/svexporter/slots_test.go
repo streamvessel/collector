@@ -236,3 +236,25 @@ func TestExporterKeepsSlotsInQueueStorage(t *testing.T) {
 		assert.NotContains(t, entry.Message, "X-Amz-Signature")
 	}
 }
+
+// clear is not forever: leasing is tried again after an hour, and a lease
+// that was in flight when the pool was cleared is discarded.
+func TestSlotPoolClearRecovers(t *testing.T) {
+	f := newFakeSV(t)
+	clock := &testClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	p := newTestPool(t, f, clock)
+
+	inFlight := make(chan struct{})
+	f.leasesResp = func() (int, any) {
+		p.clear() // revoked while this lease is answered
+		close(inFlight)
+		return 200, leaseResponse{Slots: []target{{URL: "https://s/1", ExpiresAt: clock.now().Add(time.Hour)}}, Max: 8}
+	}
+	require.NoError(t, p.refill(context.Background()))
+	<-inFlight
+	assert.Zero(t, p.len(), "slots minted before the clear are not used")
+
+	assert.False(t, p.needsRefill())
+	clock.add(heldBackoff)
+	assert.True(t, p.needsRefill(), "leasing resumes after the backoff")
+}

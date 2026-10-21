@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -89,15 +89,20 @@ const (
 	classUnavailable                 // sv-be down or overloaded: offline slot, else back off
 	classLocal                       // failed before leaving this host (client_secret_file)
 	classStaleToken                  // 401 invalid_token: retry until the extension has a new token
+	classCredentials                 // token endpoint: invalid_client; hold, retry every credentialsRetry
 	classHeld                        // 409: an operator has to act; hold for an hour
-	classRevoked                     // invalid_client, agent_revoked: drop, discard slots
+	classRevoked                     // agent_revoked: drop, discard slots
 	classPermanent                   // scope_changed, 400/422: drop
 )
 
 func (e *apiError) class() errClass {
 	switch {
-	case e.code == "invalid_client" || e.code == "agent_revoked":
+	case e.code == "agent_revoked":
 		return classRevoked
+	case e.code == "invalid_client":
+		// A deleted secret, a revoked agent, or just a wrong or not yet
+		// rotated secret file: keep the data until the operator fixes it.
+		return classCredentials
 	case e.code == "scope_changed",
 		// sv-be refusing the request itself; never the token endpoint,
 		// whose other refusals may be a misconfiguration the operator fixes.
@@ -127,7 +132,7 @@ func (c *svClient) presign(ctx context.Context, req uploadRequest) (*target, err
 		return nil, err
 	}
 	if t.URL == "" {
-		return nil, &apiError{op: "uploads", err: errors.New("response has no url")}
+		return nil, &apiError{op: "uploads", status: http.StatusOK, err: errors.New("response has no url")}
 	}
 	return &t, nil
 }
@@ -188,25 +193,23 @@ func transportError(op string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &apiError{op: op, err: err, local: !networkFailure(err)}
+	return &apiError{op: op, err: err, local: credentialsUnreadable(err)}
 }
 
-// networkFailure reports whether err means sv-be (or its token endpoint) did
-// not answer: a refused or reset connection, a DNS failure, a timeout. Every
-// error from http.Client is a *url.Error, so look at what it wraps.
-func networkFailure(err error) bool {
+// credentialsUnreadable reports whether the oauth2client extension failed to
+// read client_secret_file (or client_id_file): missing, unreadable or empty.
+// That is this host's problem, not sv-be being down.
+func credentialsUnreadable(err error) bool {
+	var pathErr *fs.PathError
+	return errors.As(err, &pathErr) || strings.Contains(err.Error(), "empty credentials file")
+}
+
+// dialFailure reports whether a request never reached the server: the
+// connection could not be made or the name not resolved.
+func dialFailure(err error) bool {
 	var opErr *net.OpError
 	var dnsErr *net.DNSError
-	var urlErr *url.Error
-	switch {
-	case errors.As(err, &opErr), errors.As(err, &dnsErr),
-		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
-		errors.Is(err, context.DeadlineExceeded):
-		return true
-	case errors.As(err, &urlErr):
-		return urlErr.Timeout()
-	}
-	return false
+	return errors.As(err, &dnsErr) || (errors.As(err, &opErr) && opErr.Op == "dial")
 }
 
 // errorCode reads {"error": "...", "error_description": "..."} from an

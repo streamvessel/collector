@@ -7,9 +7,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -184,18 +188,76 @@ func TestInvalidTokenRetriesWithNextToken(t *testing.T) {
 	require.NoError(t, e.pushLogs(context.Background(), testLogs(1)))
 }
 
-func TestInvalidClientIsPermanentWithoutRetryLoop(t *testing.T) {
+// A refused client credential stops uploads without dropping data: the
+// secret file may just be wrong or not yet rotated. One token request per
+// attempt, then a long hold, so no retry loop against sv-be's limiter.
+func TestInvalidClientHoldsBatchWithoutRetryLoop(t *testing.T) {
 	f := newFakeSV(t)
 	f.tokenError = "invalid_client"
-	e, logs := startExporter(t, testConfig(f, 0), newOAuthHost(t, f, time.Minute))
+	e, logs := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
 
 	err := e.pushLogs(context.Background(), testLogs(1))
 	require.Error(t, err)
-	assert.True(t, consumererror.IsPermanent(err))
+	assert.False(t, consumererror.IsPermanent(err), "the batch is kept")
+	assert.Contains(t, err.Error(), "invalid_client")
 	_, uploads, puts, _ := f.snapshot()
 	assert.Zero(t, uploads)
 	assert.Zero(t, puts)
-	assert.Equal(t, 1, logs.FilterMessageSnippet("invalid_client").Len())
+	assert.Equal(t, 1, logs.FilterMessageSnippet("Uploads stop and batches are kept").Len())
+
+	// Fixing the secret file is enough: the next attempt goes through.
+	f.mu.Lock()
+	f.tokenError = ""
+	f.mu.Unlock()
+	require.NoError(t, e.pushLogs(context.Background(), testLogs(1)))
+}
+
+// JSON has no NaN: one such attribute must not fail the whole batch.
+func TestNaNAttributeDoesNotFailBatch(t *testing.T) {
+	ld := testLogs(2)
+	lr := ld.ResourceLogs().At(0).ScopeLogs().At(0).LogRecords().At(1)
+	lr.Attributes().PutDouble("ratio", math.NaN())
+	lr.Attributes().PutEmptyMap("nested").PutDouble("x", math.Inf(1))
+	b, err := encodeBatch(ld, "h", time.Now())
+	require.NoError(t, err)
+	lines := gunzipLines(t, b.body)
+	require.Len(t, lines, 2)
+	attrs := lines[1]["attrs"].(map[string]any)
+	assert.Equal(t, "NaN", attrs["ratio"])
+	assert.Equal(t, "map[x:+Inf]", attrs["nested"])
+	assert.Equal(t, "GET", attrs["method"], "other attributes keep their type")
+}
+
+// A 200 without a url is a contract problem, not an outage: no slot.
+func TestUploadsWithoutURLIsNotAnOutage(t *testing.T) {
+	f := newFakeSV(t)
+	e, _ := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
+	waitForSlots(t, e, 8)
+	f.mu.Lock()
+	f.uploadsResp = func() (int, any) { return 200, map[string]any{} }
+	f.mu.Unlock()
+	require.Error(t, e.pushLogs(context.Background(), testLogs(1)))
+	assert.Equal(t, 8, e.pool.len())
+}
+
+// A slot PUT that cannot even connect leaves the slot unused.
+func TestUndeliveredSlotIsGivenBack(t *testing.T) {
+	f := newFakeSV(t)
+	e, _ := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
+	waitForSlots(t, e, 8)
+	f.mu.Lock()
+	f.uploadsResp = func() (int, any) { return 503, nil }
+	f.mu.Unlock()
+	f.storage.Close() // the bucket is unreachable too
+	require.Error(t, e.pushLogs(context.Background(), testLogs(1)))
+	assert.Equal(t, 8, e.pool.len())
+}
+
+func TestCredentialsUnreadable(t *testing.T) {
+	_, err := os.ReadFile(filepath.Join(t.TempDir(), "missing"))
+	assert.True(t, credentialsUnreadable(fmt.Errorf("wrapped: %w", err)))
+	assert.True(t, credentialsUnreadable(errors.New(`empty credentials file "/s"`)))
+	assert.False(t, credentialsUnreadable(errors.New("tls: failed to verify certificate: x509: certificate has expired")))
 }
 
 func TestUploadsResponseTable(t *testing.T) {

@@ -24,6 +24,10 @@ const (
 	// heldBackoff is how long to wait after a 409 (too_many_instances,
 	// connection_unreadable), which needs an operator.
 	heldBackoff = time.Hour
+	// credentialsRetry is how often a refused client credential is tried
+	// again: one token request per consumer, well under sv-be's limit of 10
+	// failures per 5 minutes.
+	credentialsRetry = 10 * time.Minute
 	// slotsStorageKey is where the pool is kept in the file_storage client.
 	slotsStorageKey = "offline_slots"
 )
@@ -52,7 +56,7 @@ type slotPool struct {
 	minted    []time.Time // expiry of every slot sv-be minted for us, used or not
 	limit     int         // min(size, max from sv-be)
 	notBefore time.Time   // no lease call before this
-	stopped   bool        // sv-be said the agent is revoked: hold and mint nothing
+	gen       int         // bumped by clear: a lease in flight then is discarded
 }
 
 func newSlotPool(size int, client *svClient, instance string, logger *zap.Logger, now func() time.Time) *slotPool {
@@ -140,13 +144,24 @@ func (p *slotPool) len() int {
 	return len(p.slots)
 }
 
-// clear drops every slot and stops refills, after sv-be reported the agent
-// revoked: slots would still work until they expire, but must not be used.
+// clear drops every slot after sv-be refused the agent for good (revoked,
+// scope changed): slots would still work until they expire, but must not be
+// used. Leasing is tried again after heldBackoff, in case it was fixed.
 func (p *slotPool) clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.slots = nil
-	p.stopped = true
+	p.gen++
+	p.notBefore = p.now().Add(heldBackoff)
+	p.saveLocked()
+}
+
+// giveBack returns a slot whose PUT never reached the storage provider.
+func (p *slotPool) giveBack(t target) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.slots = append(p.slots, t)
+	slices.SortFunc(p.slots, byExpiry)
 	p.saveLocked()
 }
 
@@ -161,7 +176,7 @@ func (p *slotPool) dropExpiredLocked() {
 func (p *slotPool) needsRefill() bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.stopped || p.now().Before(p.notBefore) {
+	if p.now().Before(p.notBefore) {
 		return false
 	}
 	p.dropExpiredLocked()
@@ -182,6 +197,9 @@ func (p *slotPool) nextCheck(interval time.Duration) time.Duration {
 
 // refill asks sv-be for slots and keeps all it mints.
 func (p *slotPool) refill(ctx context.Context) error {
+	p.mu.Lock()
+	gen := p.gen
+	p.mu.Unlock()
 	resp, err := p.client.lease(ctx, p.instance)
 	if err != nil {
 		p.leaseFailed(err)
@@ -189,6 +207,9 @@ func (p *slotPool) refill(ctx context.Context) error {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.gen != gen {
+		return nil // cleared while the lease was in flight: these must not be used
+	}
 	now := p.now()
 	if resp.Max > 0 {
 		p.limit = min(p.size, resp.Max)
@@ -220,6 +241,8 @@ func (p *slotPool) leaseFailed(err error) {
 	case classRevoked, classPermanent:
 		p.clear()
 		p.logger.Error("sv-be refused offline slots permanently; pool cleared", zap.Error(err))
+	case classCredentials:
+		p.backoff(credentialsRetry)
 	case classHeld:
 		p.logger.Error("sv-be refused offline slots until an operator acts", zap.String("reason", ae.code), zap.String("description", ae.desc))
 		p.backoff(heldBackoff)

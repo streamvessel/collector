@@ -47,7 +47,7 @@ func createDefaultConfig() component.Config {
 
 	return &Config{
 		ClientConfig:  httpCfg,
-		TimeoutConfig: exporterhelper.TimeoutConfig{Timeout: 2 * time.Minute},
+		ExportTimeout: 2 * time.Minute,
 		QueueConfig:   configoptional.Some(queue),
 		BackOffConfig: retry,
 		Upload:        UploadConfig{Timeout: 60 * time.Second},
@@ -66,7 +66,7 @@ func createLogsExporter(ctx context.Context, set exporter.Settings, cfg componen
 		exporterhelper.WithStart(e.start),
 		exporterhelper.WithShutdown(e.shutdown),
 		exporterhelper.WithCapabilities(consumer.Capabilities{MutatesData: false}),
-		exporterhelper.WithTimeout(c.TimeoutConfig),
+		exporterhelper.WithTimeout(exporterhelper.TimeoutConfig{Timeout: c.ExportTimeout}),
 		exporterhelper.WithRetry(c.BackOffConfig),
 		exporterhelper.WithQueue(c.QueueConfig),
 	)

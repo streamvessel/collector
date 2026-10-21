@@ -213,13 +213,12 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 		if e.pool != nil && class == classRevoked {
 			e.pool.clear()
 		}
-		if ae.code == "invalid_client" {
-			e.logger.Error("sv-be refused this agent's client credentials (invalid_client): the agent was revoked or its secret deleted. Uploads stop; dropping the batch. Fix the secret file or create a new agent.",
-				zap.Int("records", b.records), zap.Error(err))
-		} else {
-			e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
-		}
+		e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
 		return consumererror.NewPermanent(err)
+	case classCredentials:
+		e.logger.Error("sv-be refused this agent's client credentials (invalid_client): the secret file is wrong or not yet rotated, the secret was deleted, or the agent was revoked. Uploads stop and batches are kept; retrying after "+credentialsRetry.String()+".",
+			zap.String("description", ae.desc), zap.Error(err))
+		return exporterhelper.NewThrottleRetry(err, credentialsRetry)
 	case classHeld:
 		// too_many_instances, connection_unreadable: an operator has to act.
 		// Keep the batch and ask again in an hour.
@@ -249,6 +248,9 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 			if res.err == nil && res.status/100 == 2 {
 				e.forgetRefusals(b)
 				return nil
+			}
+			if res.err != nil && dialFailure(res.err) {
+				e.pool.giveBack(*t) // never reached the storage provider: still unused
 			}
 			// A slot key is not this batch's hash, so 412 means the slot was
 			// used already; anything else is a failed attempt. Back off either way.
