@@ -119,7 +119,7 @@ func (e *svExporter) start(ctx context.Context, host component.Host) error {
 	}
 	e.logger.Info("StreamVessel exporter started", zap.String("instance", e.instance))
 	if e.cfg.OfflineSlots.PoolSize > 0 {
-		e.pool = &slotPool{size: e.cfg.OfflineSlots.PoolSize, client: e.sv, instance: e.instance, logger: e.logger, now: e.now}
+		e.pool = newSlotPool(e.cfg.OfflineSlots.PoolSize, e.sv, e.instance, e.logger, e.now)
 		pctx, cancel := context.WithCancel(context.Background())
 		e.stopPool = cancel
 		e.poolDone.Add(1)
@@ -203,6 +203,20 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 			e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
 		}
 		return consumererror.NewPermanent(err)
+	}
+	switch {
+	case ae.status == http.StatusConflict:
+		// too_many_instances, connection_unreadable: an operator has to act.
+		// Keep the batch and ask again in an hour.
+		e.logger.Error("sv-be refuses uploads until an operator acts; holding the batch",
+			zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Duration("retry_in", heldBackoff))
+		return exporterhelper.NewThrottleRetry(err, heldBackoff)
+	case ae.status == http.StatusUnauthorized && ae.code == "invalid_token":
+		// The oauth2client extension keeps its cached token until it is
+		// near expiry, so this repeats until then (about 10 minutes at most).
+		e.logger.Warn("sv-be rejected the access token (secret deleted or rotated?); retrying until the oauth2client extension fetches a new one",
+			zap.String("description", ae.desc))
+		return err
 	}
 	if ae.unavailable() && e.pool != nil {
 		if t := e.pool.take(); t != nil {

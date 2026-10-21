@@ -17,7 +17,7 @@ services:
       dockerfile: test/e2e/fakesvbe/Dockerfile
     environment:
       S3_ENDPOINT: http://ministack:4566
-      CLIENT_ID: sva_e2e
+      CLIENT_ID: sva_E2eTestClientId0000000
       TOKEN_TTL_SECONDS: "120"   # short, so the run exercises token refresh
     secrets: [sv_client_secret]
     depends_on: [ministack]
@@ -27,7 +27,7 @@ services:
       context: ../..
     environment:
       SV_SERVER: http://fakesvbe:8080
-      SV_CLIENT_ID: sva_e2e
+      SV_CLIENT_ID: sva_E2eTestClientId0000000
     command: ["--config", "/etc/sv-log-agent/e2e.yaml"]
     user: "0"   # reads the shared log volume
     secrets: [sv_client_secret]

@@ -2,7 +2,7 @@ package svexporter
 
 import (
 	"context"
-	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -11,62 +11,119 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestSlotPool(t *testing.T) {
+// testClock is a clock shared by the pool and the fake's slot accounting.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) now() time.Time      { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *testClock) add(d time.Duration) { c.mu.Lock(); defer c.mu.Unlock(); c.t = c.t.Add(d) }
+
+func newTestPool(t *testing.T, f *fakeSV, clock *testClock) *slotPool {
+	e, _ := startExporter(t, testConfig(f, 0), newOAuthHost(t, f, time.Minute))
+	f.mu.Lock()
+	f.clock = clock.now
+	f.mu.Unlock()
+	p := newSlotPool(8, e.sv, "web-1", zap.NewNop(), clock.now)
+	p.jitter = func(time.Duration) time.Duration { return 0 }
+	return p
+}
+
+func (f *fakeSV) leases() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.leaseCalls
+}
+
+// sv-be counts every minted, unexpired slot against max, used or not. The
+// pool must ask only when one has expired, and keep everything it gets.
+func TestSlotPoolMatchesBackendCap(t *testing.T) {
 	f := newFakeSV(t)
-	cfg := testConfig(f, 0)
-	e, _ := startExporter(t, cfg, newOAuthHost(t, f, time.Minute))
+	clock := &testClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	p := newTestPool(t, f, clock)
 
-	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
-	mkSlots := func(n int, life time.Duration) []target {
-		var s []target
-		for i := range n {
-			s = append(s, target{URL: fmt.Sprintf("https://s/%d", i), Key: fmt.Sprint(i), ExpiresAt: now.Add(life)})
-		}
-		return s
-	}
-	resp := leaseResponse{Max: 8}
-	f.leasesResp = func() (int, any) { return 200, resp }
-	p := &slotPool{size: 8, client: e.sv, instance: "web-1", logger: zap.NewNop(), now: func() time.Time { return now }}
-
-	assert.True(t, p.needsRefill())
-	assert.Nil(t, p.take())
-
-	// Fill: more than size are trimmed to the freshest size.
-	resp.Slots = append(mkSlots(4, 30*time.Minute), mkSlots(6, time.Hour)...)
+	// Startup: empty pool, one lease call fills it.
+	require.True(t, p.needsRefill())
 	require.NoError(t, p.refill(context.Background()))
 	assert.Equal(t, 8, p.len())
+	assert.Equal(t, 1, f.leases())
+
+	// Using slots does not free sv-be's count, so no lease call: half-life
+	// or a used slot is no reason to ask.
+	for range 3 {
+		require.NotNil(t, p.take())
+	}
+	clock.add(40 * time.Minute)
+	assert.False(t, p.needsRefill())
+	assert.Equal(t, 5, p.len())
+
+	// Within a minute of expiry the slots are no longer handed out, but sv-be
+	// still counts them: still no lease call.
+	clock.add(19*time.Minute + 30*time.Second)
+	assert.Zero(t, p.len())
 	assert.False(t, p.needsRefill())
 
-	// Past half-life: refill.
-	now = now.Add(16 * time.Minute)
-	assert.True(t, p.needsRefill())
-
-	// sv-be at its cap answers nothing new: no more asking until a slot expires.
-	resp.Slots = nil
+	// Once they expire, the next lease gets a full set again.
+	clock.add(time.Minute)
+	require.True(t, p.needsRefill())
 	require.NoError(t, p.refill(context.Background()))
+	assert.Equal(t, 8, p.len())
+	assert.Equal(t, 2, f.leases())
 	assert.False(t, p.needsRefill())
-	calls := f.leaseCalls
+}
 
-	// take hands out the soonest-expiring usable slot once.
-	first := p.take()
-	require.NotNil(t, first)
-	assert.Equal(t, 7, p.len())
+func TestSlotPoolAfterRestart(t *testing.T) {
+	f := newFakeSV(t)
+	clock := &testClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	first := newTestPool(t, f, clock)
+	require.NoError(t, first.refill(context.Background()))
 
-	// Slots with less than a minute left are dropped: the 30-minute ones go,
-	// the six 1-hour ones stay.
-	now = now.Add(13*time.Minute + 30*time.Second)
-	assert.Equal(t, 6, p.len())
-	assert.True(t, p.needsRefill())
-	assert.Equal(t, calls, f.leaseCalls)
-
-	// max below size caps the pool.
-	resp = leaseResponse{Slots: mkSlots(8, 2*time.Hour), Max: 3}
+	// A restarted agent holds nothing, but sv-be still counts the old slots:
+	// the empty answer must not turn into a lease call every check.
+	p := newTestPool(t, f, clock)
+	require.True(t, p.needsRefill())
 	require.NoError(t, p.refill(context.Background()))
-	assert.Equal(t, 3, p.len())
+	assert.Zero(t, p.len())
+	assert.False(t, p.needsRefill())
+	clock.add(emptyLeaseBackoff - time.Second)
+	assert.False(t, p.needsRefill())
+	clock.add(time.Second)
+	assert.True(t, p.needsRefill())
+}
+
+func TestSlotPoolLeaseErrors(t *testing.T) {
+	f := newFakeSV(t)
+	clock := &testClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	p := newTestPool(t, f, clock)
+
+	// 429: never fatal, waits for Retry-After (plus jitter, zero here).
+	f.leasesResp = func() (int, any) { return 429, map[string]string{"error": "rate_limited"} }
+	require.Error(t, p.refill(context.Background()))
+	assert.False(t, p.needsRefill())
+	clock.add(10 * time.Second)
+	assert.True(t, p.needsRefill())
+
+	// 409: an operator has to act; ask again in an hour.
+	f.leasesResp = func() (int, any) { return 409, map[string]string{"error": "too_many_instances"} }
+	require.Error(t, p.refill(context.Background()))
+	clock.add(59 * time.Minute)
+	assert.False(t, p.needsRefill())
+	clock.add(time.Minute)
+	assert.True(t, p.needsRefill())
+
+	// max below the configured size caps what the pool asks for.
+	f.leasesResp = func() (int, any) {
+		return 200, leaseResponse{Slots: []target{{URL: "https://s/1", ExpiresAt: clock.now().Add(time.Hour)}}, Max: 1}
+	}
+	require.NoError(t, p.refill(context.Background()))
+	assert.Equal(t, 1, p.len())
+	assert.False(t, p.needsRefill())
 
 	// A revoked agent clears the pool and stops refills.
+	clock.add(2 * time.Hour)
 	f.leasesResp = func() (int, any) { return 403, map[string]string{"error": "agent_revoked"} }
 	require.Error(t, p.refill(context.Background()))
-	assert.Equal(t, 0, p.len())
+	assert.Zero(t, p.len())
 	assert.False(t, p.needsRefill())
 }

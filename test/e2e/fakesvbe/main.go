@@ -29,6 +29,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -85,6 +86,9 @@ type server struct {
 	secret   string
 	key      []byte // signs stateless tokens, so a restart keeps them valid like sv-be's database does
 	ttl      time.Duration
+
+	mu     sync.Mutex
+	minted map[string][]time.Time // instance -> expiry of every slot minted, used or not
 }
 
 func serve() error {
@@ -108,7 +112,7 @@ func serve() error {
 	s := &server{
 		s3:       c,
 		presign:  s3.NewPresignClient(c),
-		clientID: env("CLIENT_ID", "sva_e2e"),
+		clientID: env("CLIENT_ID", "sva_E2eTestClientId0000000"),
 		secret:   strings.TrimSpace(string(secret)),
 		key:      []byte(env("TOKEN_KEY", "e2e")),
 		ttl:      time.Duration(ttl) * time.Second,
@@ -234,8 +238,20 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	mint := time.Now().UTC()
+	// Like sv-be: minted, unexpired slots count against max until they expire.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.minted == nil {
+		s.minted = map[string][]time.Time{}
+	}
+	var live []time.Time
+	for _, exp := range s.minted[req.Instance] {
+		if exp.After(mint) {
+			live = append(live, exp)
+		}
+	}
 	var slots []target
-	for range 8 {
+	for range 8 - len(live) {
 		id := make([]byte, 6)
 		_, _ = rand.Read(id)
 		key := fmt.Sprintf("%s/agent/%s/%s/lease_%s_%s.log.gz", prefix, req.Instance, mint.Format("20060102"),
@@ -246,7 +262,9 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		slots = append(slots, *t)
+		live = append(live, t.ExpiresAt)
 	}
+	s.minted[req.Instance] = live
 	writeJSON(w, 200, map[string]any{"slots": slots, "max": 8})
 }
 

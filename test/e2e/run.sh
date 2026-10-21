@@ -2,13 +2,15 @@
 # Kill-mid-batch and sv-be-outage test: nothing the agent read may be lost.
 #
 #   1. start MiniStack, fake sv-be and the agent; start writing N lines
-#   2. SIGKILL the agent mid-batch, start it again on the same state volume
-#   3. stop sv-be; the agent uploads to offline slots; start sv-be again
+#   2. stop sv-be; the agent uploads to offline slots; start sv-be again
+#   3. SIGKILL the agent mid-batch, start it again on the same state volume
+#      (after the outage: a restarted agent holds no slots until the ones its
+#      previous run leased expire, because sv-be still counts them)
 #   4. wait until every line 1..N is in the bucket (duplicates allowed)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-N=${N:-12000}
+N=${N:-16000}
 RATE=${RATE:-400}
 DEADLINE=${DEADLINE:-180}
 dc() { docker compose "$@"; }
@@ -29,16 +31,17 @@ dc up -d ministack fakesvbe agent
 dc --profile tools run -d --name sv-e2e-gen --rm gen -n "$N" -rate "$RATE" -rotate 3000 >/dev/null
 
 sleep 8
+echo "--- stopping sv-be; the agent should use offline slots"
+dc kill fakesvbe
+sleep 12
+dc start fakesvbe
+
+sleep 4
 echo "--- killing the agent mid-batch"
+docker inspect sv-e2e-gen >/dev/null 2>&1 || fail "generator already finished: the kill would not be mid-batch"
 dc kill -s SIGKILL agent
 sleep 3
 dc start agent
-
-sleep 6
-echo "--- stopping sv-be; the agent should use offline slots"
-dc stop fakesvbe
-sleep 12
-dc start fakesvbe
 
 echo "--- waiting for the generator"
 while docker inspect sv-e2e-gen >/dev/null 2>&1; do sleep 1; done

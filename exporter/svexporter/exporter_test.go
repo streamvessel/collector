@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/plog"
+	"go.uber.org/zap"
 )
 
 func testLogs(n int) plog.Logs {
@@ -210,6 +211,9 @@ func TestUploadsResponseTable(t *testing.T) {
 		{"server error", 503, nil, false},
 		{"unknown 403", 403, map[string]string{"error": "something_else"}, false},
 		{"not found (ingest disabled)", 404, nil, false},
+		{"too many instances", 409, map[string]string{"error": "too_many_instances"}, false},
+		{"connection unreadable", 409, map[string]string{"error": "connection_unreadable"}, false},
+		{"storage unavailable", 502, map[string]string{"error": "storage_unavailable"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -362,4 +366,31 @@ func TestPresignedContentLengthMismatch(t *testing.T) {
 	require.ErrorContains(t, err, "does not match the body")
 	_, _, puts, _ := f.snapshot()
 	assert.Zero(t, puts)
+}
+
+func TestConflictHoldsBatchAndLogs(t *testing.T) {
+	for _, code := range []string{"too_many_instances", "connection_unreadable"} {
+		t.Run(code, func(t *testing.T) {
+			f := newFakeSV(t)
+			f.uploadsResp = func() (int, any) {
+				return 409, map[string]string{"error": code, "error_description": "ask an operator"}
+			}
+			e, logs := startExporter(t, testConfig(f, 0), newOAuthHost(t, f, time.Minute))
+			err := e.pushLogs(context.Background(), testLogs(1))
+			require.Error(t, err)
+			assert.False(t, consumererror.IsPermanent(err), "the batch is kept")
+			held := logs.FilterMessageSnippet("holding the batch")
+			require.Equal(t, 1, held.Len())
+			assert.Equal(t, zap.ErrorLevel, held.All()[0].Level)
+			assert.Equal(t, "ask an operator", held.All()[0].ContextMap()["description"])
+		})
+	}
+}
+
+func TestInvalidTokenIsLogged(t *testing.T) {
+	f := newFakeSV(t)
+	f.validToken = "svla_never"
+	e, logs := startExporter(t, testConfig(f, 0), newOAuthHost(t, f, time.Minute))
+	require.Error(t, e.pushLogs(context.Background(), testLogs(1)))
+	assert.Equal(t, 1, logs.FilterMessageSnippet("rejected the access token").Len())
 }

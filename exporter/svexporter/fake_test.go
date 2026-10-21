@@ -43,16 +43,20 @@ type fakeSV struct {
 	uploadsReqs []uploadRequest
 	authSeen    []string // Authorization header of each /uploads call
 	leaseCalls  int
+	clock       func() time.Time // sv-be's clock for slot expiry
+	leaseTTL    time.Duration
+	minted      []time.Time // expiry of every slot minted, used or not
 	puts        []*http.Request
 	objects     map[string][]byte
 	signed      map[string]map[string]string // key -> headers the URL was signed with
 }
 
-const testClientID = "sva_test"
+// testClientID has the backend's format, sva_ and 22 characters.
+const testClientID = "sva_AbCdEfGhIjKlMnOpQrStUv"
 const testSecret = "svas_secret"
 
 func newFakeSV(t *testing.T) *fakeSV {
-	f := &fakeSV{t: t, tokenTTL: 900, objects: map[string][]byte{}, signed: map[string]map[string]string{}}
+	f := &fakeSV{t: t, tokenTTL: 900, clock: time.Now, leaseTTL: time.Hour, objects: map[string][]byte{}, signed: map[string]map[string]string{}}
 	f.storage = httptest.NewServer(http.HandlerFunc(f.handlePut))
 	f.sv = httptest.NewServer(http.HandlerFunc(f.handleSV))
 	t.Cleanup(func() { f.sv.Close(); f.storage.Close() })
@@ -92,10 +96,23 @@ func (f *fakeSV) handleSV(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, status, body)
 			return
 		}
+		// Like sv-be: every minted, unexpired slot counts against max,
+		// whether or not it was used; slots holds only the new ones.
+		now := f.clock()
+		live := f.minted[:0]
+		for _, exp := range f.minted {
+			if exp.After(now) {
+				live = append(live, exp)
+			}
+		}
+		f.minted = live
 		var slots []target
-		for i := range 8 {
+		for i := len(f.minted); i < 8; i++ {
 			key := fmt.Sprintf("p/agent/lease_%d_%d.log.gz", f.leaseCalls, i)
-			slots = append(slots, f.sign(key))
+			t := f.sign(key)
+			t.ExpiresAt = now.Add(f.leaseTTL)
+			f.minted = append(f.minted, t.ExpiresAt)
+			slots = append(slots, t)
 		}
 		writeJSON(w, 200, leaseResponse{Slots: slots, Max: 8})
 	default:
