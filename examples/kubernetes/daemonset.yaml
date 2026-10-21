@@ -2,7 +2,8 @@
 # reports the node name as its instance (never the pod name, which changes on
 # every rollout and would start a new folder each time).
 #
-# Create the secret from a file, so it never appears in argv or a manifest:
+# Create the secret from a file, so it stays out of shell history and manifests;
+# mounted as a volume, a rotated secret reaches the agent without a restart:
 #   kubectl -n sv-log-agent create secret generic sv-log-agent \
 #     --from-literal=client-id=sva_… --from-file=client-secret=./secret.txt
 apiVersion: v1

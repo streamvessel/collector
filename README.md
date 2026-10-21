@@ -29,7 +29,7 @@ filelog / otlp → memory_limiter → resourcedetection → sv exporter
 
 There is no batch processor: batching happens in the exporter's queue after the records are on disk, so a crash loses nothing the receivers handed over. `retry_on_failure.max_elapsed_time` is 0, so a batch is retried until it lands. The binary turns on the `stanza.synchronousLogEmitter` feature gate, so filelog does not save a read offset before the records reach the queue.
 
-Authentication is the stock `oauth2client` extension (client credentials grant against `${SV_SERVER}/be/ingest/oauth/token`); the agent has no auth code of its own. The secret is always read from a file (`client_secret_file`), which the extension re-reads, so rotating it needs no restart. Each batch is announced with `POST /be/ingest/uploads {instance, startTs, endTs, sha256}` (contract: streamvessel/sv-be#386). The PUT to the bucket goes through a separate plain HTTP client with no `Authorization` header and exactly the headers sv-be returned.
+Authentication is the stock `oauth2client` extension (client credentials grant against `${SV_SERVER}/be/ingest/oauth/token`); the agent has no auth code of its own. The examples read the secret from a file (`client_secret_file`), which the extension re-reads, so rotating it needs no restart; see [Supplying the secret](#supplying-the-secret) for the alternatives. Each batch is announced with `POST /be/ingest/uploads {instance, startTs, endTs, sha256}` (contract: streamvessel/sv-be#386). The PUT to the bucket goes through a separate plain HTTP client with no `Authorization` header and exactly the headers sv-be returned.
 
 ### NDJSON record
 
@@ -66,7 +66,7 @@ A wrong or deleted secret: the oauth2client extension auto-detects how to send t
 |---|---|
 | `SV_SERVER` | `https://app.streamvessel.com`, no trailing slash |
 | `SV_CLIENT_ID` | the agent's client id (`sva_…`) |
-| `SV_CLIENT_SECRET_FILE` | path to the file holding the secret. Never pass the secret in the environment or on the command line |
+| `SV_CLIENT_SECRET_FILE` | path to the file holding the secret (the recommended way to supply it; see below) |
 | `SV_INSTANCE` | folder name for this host or workload, `[A-Za-z0-9._-]{1,63}`; defaults to the host name. DaemonSet: the node name; sidecar: the workload name; never the pod name |
 | `SV_STORAGE_DIR` | read offsets and the persistent queue (default `/var/lib/sv-log-agent`) |
 
@@ -74,6 +74,28 @@ A wrong or deleted secret: the oauth2client extension auto-detects how to send t
 SV_SERVER=https://app.streamvessel.com SV_CLIENT_ID=sva_… \
 SV_CLIENT_SECRET_FILE=/etc/sv-log-agent/secret sv-log-agent --config examples/agent.yaml
 ```
+
+### Supplying the secret
+
+The OpenTelemetry Collector accepts the secret either way; which to use is a deployment choice, not a collector rule. **We recommend a file**, and every example here uses one:
+
+- **Rotation without a restart.** The `oauth2client` extension re-reads `client_secret_file` each time it fetches a token (about every 10 minutes). A value taken from the environment is fixed when the agent starts.
+- **Less exposure.** A file stays out of `docker inspect`, the process environment (`/proc/<pid>/environ`) and crash or support dumps that include the environment.
+- **Native platform support.** systemd `LoadCredential` (the packaged unit), Docker Compose `secrets:` and Kubernetes Secret volumes all deliver a file, and a Kubernetes Secret volume picks up a rotated value by itself.
+
+A file is not encrypted on disk: protect it with permissions (`chmod 600`, or the platform's secret store), as you would the environment.
+
+**Environment variable.** Where files are not available (for example DigitalOcean App Platform, which offers only encrypted environment variables), replace `client_secret_file` in the config with:
+
+```yaml
+extensions:
+  oauth2client:
+    client_secret: ${env:SV_CLIENT_SECRET}
+```
+
+This works; the collector prints the value as `[REDACTED]` in its own output. Rotating the secret then needs a restart, so keep the old secret until every agent has restarted with the new one.
+
+**Avoid the command line** (`--set extensions::oauth2client::client_secret=…`): arguments are visible to every user on the host through `ps`.
 
 ### Build and test
 

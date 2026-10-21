@@ -1,5 +1,5 @@
-# sv-log-agent next to an nginx container. The secret is a file, never an
-# environment variable:
+# sv-log-agent next to an nginx container. The secret is passed as a file
+# (recommended: rotation needs no restart and it stays out of docker inspect):
 #
 #   printf '%s' 'svas_…' > sv_client_secret.txt && chmod 600 sv_client_secret.txt
 #   SV_CLIENT_ID=sva_… docker compose up -d

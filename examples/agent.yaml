@@ -4,8 +4,9 @@
 # Environment:
 #   SV_SERVER              https://app.streamvessel.com (no trailing slash)
 #   SV_CLIENT_ID           the agent's client id (sva_…)
-#   SV_CLIENT_SECRET_FILE  path to a file holding the secret (svas_…); never
-#                          put the secret itself in the environment or argv
+#   SV_CLIENT_SECRET_FILE  path to a file holding the secret (svas_…); a file
+#                          is recommended over an environment variable: it can
+#                          be rotated without a restart (see README)
 #   SV_INSTANCE            optional; defaults to the host name
 #   SV_STORAGE_DIR         optional; read offsets and the persistent queue
 #                          (default /var/lib/sv-log-agent)
