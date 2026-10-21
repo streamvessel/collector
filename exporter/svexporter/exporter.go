@@ -239,7 +239,9 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 			zap.String("description", ae.desc))
 		return err
 	}
-	if ae.unavailable() && e.pool != nil {
+	// An expired export deadline is not sv-be being down: a slot PUT with
+	// the same context could only fail, and the slot would be lost.
+	if ae.unavailable() && e.pool != nil && ctx.Err() == nil {
 		if t := e.pool.take(); t != nil {
 			e.logger.Warn("sv-be unavailable; uploading to an offline slot", zap.String("key", t.Key), zap.Error(err))
 			res := e.putBatch(ctx, t, b)

@@ -88,6 +88,7 @@ func encodeBatch(ld plog.Logs, fallbackHost string, now time.Time) (*batch, erro
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
+	b.start, b.end = clampToServer(b.start, b.end, now)
 	b.body = buf.Bytes()
 	sum := sha256.Sum256(b.body)
 	b.sha256 = hex.EncodeToString(sum[:])
@@ -108,7 +109,30 @@ func recordTime(lr plog.LogRecord, now time.Time) time.Time {
 const (
 	maxRecordAge  = 7 * 24 * time.Hour
 	maxRecordLead = time.Minute
+
+	// sv-be refuses startTs over 30 days old and endTs over 5 minutes
+	// ahead of its clock; stay inside with room for clock skew.
+	serverMaxAge  = 29 * 24 * time.Hour
+	serverMaxLead = 4 * time.Minute
 )
+
+// clampToServer keeps the batch range inside what sv-be accepts, judged by
+// this agent's clock. The observed time comes from the producer for OTLP,
+// so a producer with a bad clock can put both of a record's times out of
+// range. A batch already in range is unchanged, so its key stays stable.
+func clampToServer(start, end, now time.Time) (time.Time, time.Time) {
+	lo, hi := now.Add(-serverMaxAge), now.Add(serverMaxLead)
+	clamp := func(t time.Time) time.Time {
+		if t.Before(lo) {
+			return lo
+		}
+		if t.After(hi) {
+			return hi
+		}
+		return t
+	}
+	return clamp(start), clamp(end)
+}
 
 // rangeTime is what a record contributes to the batch's startTs/endTs: its
 // time clamped to [arrival - 7 days, arrival + 1 min], arrival being when

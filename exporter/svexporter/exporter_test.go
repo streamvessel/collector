@@ -450,3 +450,42 @@ func TestMissingSecretFileIsNotAnOutage(t *testing.T) {
 	assert.Equal(t, 1, logs2.FilterMessageSnippet("client_secret_file").Len())
 	assert.Zero(t, logs.FilterMessageSnippet("offline slot").Len()+logs2.FilterMessageSnippet("offline slot").Len())
 }
+
+// OTLP producers set the observed time themselves; a producer with a bad
+// clock must not get the batch refused for good.
+func TestBatchRangeFromBadProducerClock(t *testing.T) {
+	now := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	for name, skew := range map[string]time.Duration{"40 days behind": -40 * 24 * time.Hour, "1 hour ahead": time.Hour} {
+		t.Run(name, func(t *testing.T) {
+			ld := plog.NewLogs()
+			lr := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords().AppendEmpty()
+			bad := now.Add(skew)
+			lr.SetTimestamp(pcommon.NewTimestampFromTime(bad))
+			lr.SetObservedTimestamp(pcommon.NewTimestampFromTime(bad))
+			b, err := encodeBatch(ld, "h", now)
+			require.NoError(t, err)
+			assert.False(t, b.start.Before(now.Add(-30*24*time.Hour)), "startTs within sv-be's 30 days")
+			assert.False(t, b.end.After(now.Add(5*time.Minute)), "endTs within sv-be's 5 minutes")
+			assert.False(t, b.start.After(b.end))
+			assert.Equal(t, formatTime(bad), gunzipLines(t, b.body)[0]["timestamp"], "the record keeps its time")
+		})
+	}
+}
+
+// When the export deadline has passed during /uploads, no slot is spent.
+func TestExpiredDeadlineKeepsSlots(t *testing.T) {
+	f := newFakeSV(t)
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	e, _ := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
+	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	f.mu.Lock()
+	f.uploadsResp = func() (int, any) { f.mu.Unlock(); <-block; f.mu.Lock(); return 503, nil }
+	f.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	err := e.pushLogs(ctx, testLogs(1))
+	require.Error(t, err)
+	assert.Equal(t, 8, e.pool.len(), "no slot spent on an expired deadline")
+}
