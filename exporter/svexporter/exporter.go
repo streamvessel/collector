@@ -208,8 +208,9 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 	if !errors.As(err, &ae) {
 		return err
 	}
-	if ae.permanent() {
-		if e.pool != nil && (ae.code == "invalid_client" || ae.code == "agent_revoked") {
+	switch class := ae.class(); class {
+	case classRevoked, classPermanent:
+		if e.pool != nil && class == classRevoked {
 			e.pool.clear()
 		}
 		if ae.code == "invalid_client" {
@@ -219,29 +220,29 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 			e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
 		}
 		return consumererror.NewPermanent(err)
-	}
-	switch {
-	case ae.status == http.StatusConflict:
+	case classHeld:
 		// too_many_instances, connection_unreadable: an operator has to act.
 		// Keep the batch and ask again in an hour.
 		e.logger.Error("sv-be refuses uploads until an operator acts; holding the batch",
 			zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Duration("retry_in", heldBackoff))
 		return exporterhelper.NewThrottleRetry(err, heldBackoff)
-	case ae.local:
+	case classLocal:
 		// Not an outage: no offline slot. Usually client_secret_file is
 		// missing, empty or unreadable; the batch waits until it is fixed.
 		e.logger.Error("Could not call sv-be: the request failed before leaving this host (check client_secret_file)", zap.Error(err))
 		return err
-	case ae.status == http.StatusUnauthorized && ae.code == "invalid_token":
+	case classStaleToken:
 		// The oauth2client extension keeps its cached token until it is
 		// near expiry, so this repeats until then (about 10 minutes at most).
 		e.logger.Warn("sv-be rejected the access token (secret deleted or rotated?); retrying until the oauth2client extension fetches a new one",
 			zap.String("description", ae.desc))
 		return err
-	}
-	// An expired export deadline is not sv-be being down: a slot PUT with
-	// the same context could only fail, and the slot would be lost.
-	if ae.unavailable() && e.pool != nil && ctx.Err() == nil {
+	case classUnavailable:
+		// An expired export deadline is not sv-be being down: a slot PUT
+		// with the same context could only fail, and the slot would be lost.
+		if e.pool == nil || ctx.Err() != nil {
+			break
+		}
 		if t := e.pool.take(); t != nil {
 			e.logger.Warn("sv-be unavailable; uploading to an offline slot", zap.String("key", t.Key), zap.Error(err))
 			res := e.putBatch(ctx, t, b)

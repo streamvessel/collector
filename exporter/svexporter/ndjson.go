@@ -88,7 +88,6 @@ func encodeBatch(ld plog.Logs, fallbackHost string, now time.Time) (*batch, erro
 	if err := zw.Close(); err != nil {
 		return nil, err
 	}
-	b.start, b.end = clampToServer(b.start, b.end, now)
 	b.body = buf.Bytes()
 	sum := sha256.Sum256(b.body)
 	b.sha256 = hex.EncodeToString(sum[:])
@@ -116,60 +115,50 @@ const (
 	serverMaxLead = 4 * time.Minute
 )
 
-// clampToServer keeps the batch range inside what sv-be accepts, judged by
-// this agent's clock. The observed time comes from the producer for OTLP,
-// so a producer with a bad clock can put both of a record's times out of
-// range. A batch already in range is unchanged, so its key stays stable.
-func clampToServer(start, end, now time.Time) (time.Time, time.Time) {
-	lo, hi := now.Add(-serverMaxAge), now.Add(serverMaxLead)
-	clamp := func(t time.Time) time.Time {
-		if t.Before(lo) {
-			return lo
-		}
-		if t.After(hi) {
-			return hi
-		}
-		return t
-	}
-	return clamp(start), clamp(end)
-}
-
-// rangeTime is what a record contributes to the batch's startTs/endTs: its
-// time clamped to [arrival - 7 days, arrival + 1 min], arrival being when
-// the agent read it. sv-be refuses a batch for good when startTs is over 30
-// days old or endTs over 5 minutes ahead, so one stale or future-dated
-// record must not decide the range. The observed time is stored with the
-// record, so the range, and the key, stay the same on every retry. The
-// record's own timestamp in the NDJSON is left as it is.
+// rangeTime is what a record contributes to the batch's startTs/endTs, which
+// name the object. sv-be refuses a batch for good when startTs is over 30
+// days old or endTs over 5 minutes ahead, so the record's time is clamped
+// twice; its own timestamp in the NDJSON is left as it is.
+//   - To [arrival - 7 days, arrival + 1 min], arrival being when the agent
+//     read it: one stale or future-dated record must not decide the range.
+//     The observed time is stored with the record, so the range, and the
+//     key, stay the same on every retry.
+//   - To [now - 29 days, now + 4 min] by this agent's clock: for OTLP the
+//     observed time comes from the producer, whose clock may be wrong too.
+//     A record already in range is unchanged, so its key stays stable.
 func rangeTime(lr plog.LogRecord, ts, now time.Time) time.Time {
 	arrival := now
 	if obs := lr.ObservedTimestamp(); obs != 0 {
 		arrival = obs.AsTime()
 	}
-	lo, hi := arrival.Add(-maxRecordAge), arrival.Add(maxRecordLead)
+	ts = clampTime(ts, arrival.Add(-maxRecordAge), arrival.Add(maxRecordLead))
+	return clampTime(ts, now.Add(-serverMaxAge), now.Add(serverMaxLead))
+}
+
+func clampTime(t, lo, hi time.Time) time.Time {
 	switch {
-	case ts.Before(lo):
+	case t.Before(lo):
 		return lo
-	case ts.After(hi):
+	case t.After(hi):
 		return hi
 	}
-	return ts
+	return t
 }
 
 func toLine(lr plog.LogRecord, ts time.Time, host string) line {
 	l := line{
 		Timestamp: formatTime(ts),
 		Level:     level(lr),
-		Message:   bodyString(lr.Body()),
+		Message:   lr.Body().AsString(),
 		Host:      host,
 		Attrs:     make(map[string]any, lr.Attributes().Len()),
 	}
-	lifted := map[string]bool{}
+	var statusKey, fileKey string // lifted out of attrs
 	for _, k := range statusKeys {
 		if v, ok := lr.Attributes().Get(k); ok {
 			if n, ok := statusCode(v); ok {
 				l.Status = &n
-				lifted[k] = true
+				statusKey = k
 				break
 			}
 		}
@@ -177,12 +166,12 @@ func toLine(lr plog.LogRecord, ts time.Time, host string) line {
 	for _, k := range fileKeys {
 		if v, ok := lr.Attributes().Get(k); ok && v.Str() != "" {
 			l.File = v.Str()
-			lifted[k] = true
+			fileKey = k
 			break
 		}
 	}
 	lr.Attributes().Range(func(k string, v pcommon.Value) bool {
-		if !lifted[k] {
+		if k != statusKey && k != fileKey {
 			l.Attrs[k] = v.AsRaw()
 		}
 		return true
@@ -225,16 +214,6 @@ func statusCode(v pcommon.Value) (int64, bool) {
 		return n, err == nil
 	}
 	return 0, false
-}
-
-func bodyString(v pcommon.Value) string {
-	switch v.Type() {
-	case pcommon.ValueTypeEmpty:
-		return ""
-	case pcommon.ValueTypeStr:
-		return v.Str()
-	}
-	return v.AsString()
 }
 
 func firstString(m pcommon.Map, keys []string) string {

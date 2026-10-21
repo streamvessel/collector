@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -44,11 +45,9 @@ type fakeSV struct {
 	authSeen    []string // Authorization header of each /uploads call
 	leaseCalls  int
 	clock       func() time.Time // sv-be's clock for slot expiry
-	leaseTTL    time.Duration
-	minted      []time.Time // expiry of every slot minted, used or not
+	minted      []time.Time      // expiry of every slot minted, used or not
 	puts        []*http.Request
 	objects     map[string][]byte
-	signed      map[string]map[string]string // key -> headers the URL was signed with
 }
 
 // testClientID has the backend's format, sva_ and 22 characters.
@@ -56,7 +55,7 @@ const testClientID = "sva_AbCdEfGhIjKlMnOpQrStUv"
 const testSecret = "svas_secret"
 
 func newFakeSV(t *testing.T) *fakeSV {
-	f := &fakeSV{t: t, tokenTTL: 900, clock: time.Now, leaseTTL: time.Hour, objects: map[string][]byte{}, signed: map[string]map[string]string{}}
+	f := &fakeSV{t: t, tokenTTL: 900, clock: time.Now, objects: map[string][]byte{}}
 	f.storage = httptest.NewServer(http.HandlerFunc(f.handlePut))
 	f.sv = httptest.NewServer(http.HandlerFunc(f.handleSV))
 	t.Cleanup(func() { f.sv.Close(); f.storage.Close() })
@@ -99,18 +98,12 @@ func (f *fakeSV) handleSV(w http.ResponseWriter, r *http.Request) {
 		// Like sv-be: every minted, unexpired slot counts against max,
 		// whether or not it was used; slots holds only the new ones.
 		now := f.clock()
-		live := f.minted[:0]
-		for _, exp := range f.minted {
-			if exp.After(now) {
-				live = append(live, exp)
-			}
-		}
-		f.minted = live
+		f.minted = slices.DeleteFunc(f.minted, func(exp time.Time) bool { return !exp.After(now) })
 		var slots []target
 		for i := len(f.minted); i < 8; i++ {
 			key := fmt.Sprintf("p/agent/lease_%d_%d.log.gz", f.leaseCalls, i)
 			t := f.sign(key)
-			t.ExpiresAt = now.Add(f.leaseTTL)
+			t.ExpiresAt = now.Add(time.Hour) // sv-be mints slots for 1 hour
 			f.minted = append(f.minted, t.ExpiresAt)
 			slots = append(slots, t)
 		}
@@ -159,7 +152,6 @@ func (f *fakeSV) authorized(w http.ResponseWriter, r *http.Request) bool {
 // if-none-match (AWS) and sends lowercase keys without Host.
 func (f *fakeSV) sign(key string) target {
 	h := map[string]string{"if-none-match": "*"}
-	f.signed[key] = h
 	return target{
 		URL:       f.storage.URL + "/bucket/" + key + "?X-Amz-Signature=abc",
 		Headers:   h,
@@ -205,16 +197,11 @@ func (f *fakeSV) handlePut(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "<Error><Code>InvalidArgument</Code></Error>")
 		return
 	}
-	for k, v := range f.signed[key] {
-		got := r.Header.Get(k)
-		if http.CanonicalHeaderKey(k) == "Content-Length" {
-			got = fmt.Sprint(r.ContentLength)
-		}
-		if got != v {
-			w.WriteHeader(http.StatusForbidden)
-			fmt.Fprint(w, "<Error><Code>SignatureDoesNotMatch</Code></Error>")
-			return
-		}
+	// Every URL is signed with if-none-match (as on AWS), so it must be sent.
+	if r.Header.Get("If-None-Match") != "*" {
+		w.WriteHeader(http.StatusForbidden)
+		fmt.Fprint(w, "<Error><Code>SignatureDoesNotMatch</Code></Error>")
+		return
 	}
 	if _, exists := f.objects[key]; exists {
 		w.WriteHeader(http.StatusPreconditionFailed)
@@ -290,4 +277,10 @@ func startExporter(t *testing.T, cfg *Config, host *testHost) (*svExporter, *obs
 	require.NoError(t, e.start(context.Background(), host))
 	t.Cleanup(func() { _ = e.shutdown(context.Background()) })
 	return e, logs
+}
+
+// waitForSlots waits for the pool's first lease.
+func waitForSlots(t *testing.T, e *svExporter, n int) {
+	t.Helper()
+	require.Eventually(t, func() bool { return e.pool.len() == n }, 5*time.Second, 10*time.Millisecond)
 }

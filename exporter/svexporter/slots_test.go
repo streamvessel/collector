@@ -223,7 +223,7 @@ func TestExporterKeepsSlotsInQueueStorage(t *testing.T) {
 	cfg.QueueConfig.Get().StorageID = &storageID
 
 	e, _ := startExporter(t, cfg, host)
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 	require.NoError(t, e.shutdown(context.Background()))
 
 	restarted, logs := startExporter(t, cfg, host)

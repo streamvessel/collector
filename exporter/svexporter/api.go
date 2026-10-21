@@ -80,25 +80,39 @@ func (e *apiError) Error() string {
 
 func (e *apiError) Unwrap() error { return e.err }
 
-// permanent reports errors no retry can fix: the agent is revoked, its secret
-// deleted, or the connection no longer reaches its prefix.
-func (e *apiError) permanent() bool {
-	switch e.code {
-	case "invalid_client", "agent_revoked", "scope_changed":
-		return true
-	}
-	// sv-be refusing the request itself; never the token endpoint, whose
-	// other refusals may be a misconfiguration the operator fixes.
-	return e.op != "token" && (e.status == http.StatusBadRequest || e.status == http.StatusUnprocessableEntity)
-}
+// errClass is what the agent does about a failed sv-be call: the response
+// table in one place.
+type errClass int
 
-// unavailable reports that sv-be is down or overloaded: the case for an
-// offline slot.
-func (e *apiError) unavailable() bool {
-	if e.local {
-		return false
+const (
+	classRetry       errClass = iota // back off, keep the batch
+	classUnavailable                 // sv-be down or overloaded: offline slot, else back off
+	classLocal                       // failed before leaving this host (client_secret_file)
+	classStaleToken                  // 401 invalid_token: retry until the extension has a new token
+	classHeld                        // 409: an operator has to act; hold for an hour
+	classRevoked                     // invalid_client, agent_revoked: drop, discard slots
+	classPermanent                   // scope_changed, 400/422: drop
+)
+
+func (e *apiError) class() errClass {
+	switch {
+	case e.code == "invalid_client" || e.code == "agent_revoked":
+		return classRevoked
+	case e.code == "scope_changed",
+		// sv-be refusing the request itself; never the token endpoint,
+		// whose other refusals may be a misconfiguration the operator fixes.
+		e.op != "token" && (e.status == http.StatusBadRequest || e.status == http.StatusUnprocessableEntity):
+		return classPermanent
+	case e.local:
+		return classLocal
+	case e.status == http.StatusConflict:
+		return classHeld
+	case e.status == http.StatusUnauthorized && e.code == "invalid_token":
+		return classStaleToken
+	case e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500:
+		return classUnavailable
 	}
-	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500
+	return classRetry
 }
 
 // svClient talks to sv-be through the OAuth2-wrapped client.

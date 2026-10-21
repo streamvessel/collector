@@ -67,6 +67,9 @@ func newSlotPool(size int, client *svClient, instance string, logger *zap.Logger
 	}
 }
 
+// byExpiry orders slots soonest expiry first, the order take hands them out.
+func byExpiry(a, b target) int { return a.ExpiresAt.Compare(b.ExpiresAt) }
+
 // poolState is what is persisted.
 type poolState struct {
 	Instance string      `json:"instance"`
@@ -95,7 +98,7 @@ func (p *slotPool) load(ctx context.Context) {
 	defer p.mu.Unlock()
 	p.slots, p.minted = st.Slots, st.Minted
 	p.dropExpiredLocked()
-	slices.SortFunc(p.slots, func(a, b target) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	slices.SortFunc(p.slots, byExpiry)
 	p.logger.Info("Restored offline upload slots", zap.Int("usable", len(p.slots)), zap.Int("outstanding", len(p.minted)))
 }
 
@@ -197,7 +200,7 @@ func (p *slotPool) refill(ctx context.Context) error {
 		p.minted = append(p.minted, t.ExpiresAt)
 		p.slots = append(p.slots, t)
 	}
-	slices.SortFunc(p.slots, func(a, b target) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	slices.SortFunc(p.slots, byExpiry)
 	p.saveLocked()
 	p.notBefore = time.Time{}
 	if len(resp.Slots) == 0 {
@@ -213,15 +216,17 @@ func (p *slotPool) leaseFailed(err error) {
 	if !errors.As(err, &ae) {
 		return
 	}
-	switch {
-	case ae.permanent():
+	switch ae.class() {
+	case classRevoked, classPermanent:
 		p.clear()
 		p.logger.Error("sv-be refused offline slots permanently; pool cleared", zap.Error(err))
-		return
-	case ae.status == http.StatusConflict:
+	case classHeld:
 		p.logger.Error("sv-be refused offline slots until an operator acts", zap.String("reason", ae.code), zap.String("description", ae.desc))
 		p.backoff(heldBackoff)
-	case ae.status == http.StatusTooManyRequests:
+	case classUnavailable:
+		if ae.status != http.StatusTooManyRequests {
+			return // sv-be down: the next check asks again
+		}
 		// Lease calls are limited per agent, and many instances share one
 		// agent: spread the retries.
 		p.backoff(max(ae.retry, 10*time.Second) + p.jitter(time.Minute))

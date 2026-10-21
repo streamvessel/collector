@@ -295,7 +295,7 @@ func TestPutRefusedIsHeldAfterThreeRetries(t *testing.T) {
 func TestOfflineSlotWhenSVBeUnavailable(t *testing.T) {
 	f := newFakeSV(t)
 	e, logs := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 
 	f.mu.Lock()
 	f.uploadsResp = func() (int, any) { return 503, nil }
@@ -319,7 +319,7 @@ func TestOfflineSlotWhenSVBeDown(t *testing.T) {
 	f := newFakeSV(t)
 	host := newOAuthHost(t, f, time.Minute)
 	e, _ := startExporter(t, testConfig(f, 8), host)
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 	require.NoError(t, e.pushLogs(context.Background(), testLogs(1))) // token cached
 
 	f.sv.Close() // sv-be stops answering
@@ -340,7 +340,7 @@ func TestNoSlotLeftIsRetried(t *testing.T) {
 func TestRevokedAgentClearsSlots(t *testing.T) {
 	f := newFakeSV(t)
 	e, _ := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 	f.mu.Lock()
 	f.uploadsResp = func() (int, any) { return 403, map[string]string{"error": "agent_revoked"} }
 	f.mu.Unlock()
@@ -437,7 +437,7 @@ func TestMissingSecretFileIsNotAnOutage(t *testing.T) {
 	f := newFakeSV(t)
 	host := newOAuthHost(t, f, time.Minute)
 	e, logs := startExporter(t, testConfig(f, 8), host)
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 
 	// Force a token fetch with the file gone: a fresh extension, same config.
 	require.NoError(t, os.Remove(host.secretFile))
@@ -478,7 +478,7 @@ func TestExpiredDeadlineKeepsSlots(t *testing.T) {
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
 	e, _ := startExporter(t, testConfig(f, 8), newOAuthHost(t, f, time.Minute))
-	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	waitForSlots(t, e, 8)
 	f.mu.Lock()
 	f.uploadsResp = func() (int, any) { f.mu.Unlock(); <-block; f.mu.Lock(); return 503, nil }
 	f.mu.Unlock()

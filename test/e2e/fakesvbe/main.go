@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +37,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 func main() {
@@ -79,8 +82,11 @@ const prefix = "agents"
 
 var instanceRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,63}$`)
 
+func validInstance(name string) bool {
+	return instanceRe.MatchString(name) && name != "." && name != ".."
+}
+
 type server struct {
-	s3       *s3.Client
 	presign  *s3.PresignClient
 	clientID string
 	secret   string
@@ -96,7 +102,9 @@ func serve() error {
 	c := s3Client()
 	for i := 0; ; i++ {
 		_, err := c.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: &bucket})
-		if err == nil || strings.Contains(err.Error(), "BucketAlready") {
+		var owned *types.BucketAlreadyOwnedByYou
+		var exists *types.BucketAlreadyExists
+		if err == nil || errors.As(err, &owned) || errors.As(err, &exists) {
 			break
 		}
 		if i == 60 {
@@ -110,7 +118,6 @@ func serve() error {
 		return err
 	}
 	s := &server{
-		s3:       c,
 		presign:  s3.NewPresignClient(c),
 		clientID: env("CLIENT_ID", "sva_E2eTestClientId0000000"),
 		secret:   strings.TrimSpace(string(secret)),
@@ -121,7 +128,6 @@ func serve() error {
 	mux.HandleFunc("POST /be/ingest/oauth/token", s.token)
 	mux.HandleFunc("POST /be/ingest/uploads", s.uploads)
 	mux.HandleFunc("POST /be/ingest/leases", s.leases)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(204) })
 	log.Printf("fakesvbe listening on :8080, bucket %s", bucket)
 	return http.ListenAndServe(":8080", logRequests(mux))
 }
@@ -210,7 +216,7 @@ func (s *server) uploads(w http.ResponseWriter, r *http.Request) {
 	sum, err := hex.DecodeString(req.SHA256) // names the file; nothing is signed with it
 	start, err1 := time.Parse(time.RFC3339Nano, req.StartTs)
 	end, err2 := time.Parse(time.RFC3339Nano, req.EndTs)
-	if !instanceRe.MatchString(req.Instance) || req.Instance == "." || req.Instance == ".." ||
+	if !validInstance(req.Instance) ||
 		err != nil || len(sum) != 32 || err1 != nil || err2 != nil {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
 		return
@@ -233,7 +239,7 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Instance string `json:"instance"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !instanceRe.MatchString(req.Instance) {
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || !validInstance(req.Instance) {
 		writeJSON(w, 400, map[string]string{"error": "invalid_request"})
 		return
 	}
@@ -244,12 +250,7 @@ func (s *server) leases(w http.ResponseWriter, r *http.Request) {
 	if s.minted == nil {
 		s.minted = map[string][]time.Time{}
 	}
-	var live []time.Time
-	for _, exp := range s.minted[req.Instance] {
-		if exp.After(mint) {
-			live = append(live, exp)
-		}
-	}
+	live := slices.DeleteFunc(s.minted[req.Instance], func(exp time.Time) bool { return !exp.After(mint) })
 	var slots []target
 	for range 8 - len(live) {
 		id := make([]byte, 6)
