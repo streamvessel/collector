@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -53,6 +55,9 @@ type apiError struct {
 	desc   string // error_description, for the log
 	retry  time.Duration
 	err    error
+	// local: the request never left this host, e.g. the oauth2client
+	// extension could not read client_secret_file. Not an outage.
+	local bool
 }
 
 func (e *apiError) Error() string {
@@ -90,6 +95,9 @@ func (e *apiError) permanent() bool {
 // unavailable reports that sv-be is down or overloaded: the case for an
 // offline slot.
 func (e *apiError) unavailable() bool {
+	if e.local {
+		return false
+	}
 	return e.status == 0 || e.status == http.StatusTooManyRequests || e.status >= 500
 }
 
@@ -166,7 +174,25 @@ func transportError(op string, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
-	return &apiError{op: op, err: err}
+	return &apiError{op: op, err: err, local: !networkFailure(err)}
+}
+
+// networkFailure reports whether err means sv-be (or its token endpoint) did
+// not answer: a refused or reset connection, a DNS failure, a timeout. Every
+// error from http.Client is a *url.Error, so look at what it wraps.
+func networkFailure(err error) bool {
+	var opErr *net.OpError
+	var dnsErr *net.DNSError
+	var urlErr *url.Error
+	switch {
+	case errors.As(err, &opErr), errors.As(err, &dnsErr),
+		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF),
+		errors.Is(err, context.DeadlineExceeded):
+		return true
+	case errors.As(err, &urlErr):
+		return urlErr.Timeout()
+	}
+	return false
 }
 
 // errorCode reads {"error": "...", "error_description": "..."} from an

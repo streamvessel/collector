@@ -45,6 +45,7 @@ The batch's `startTs`/`endTs` (which name the object) come from the records' tim
 
 | Response | Agent does |
 |---|---|
+| `client_secret_file` missing, empty or unreadable | logged at error level; the batch is kept and retried; no offline slot is used (sv-be is not down) |
 | token request `invalid_client` | permanent: logged loudly, batch dropped, no retry loop |
 | 401 `invalid_token` | logged and retried; succeeds once the extension has a new token (it keeps its cached token until near expiry, so up to about 10 minutes) |
 | 403 `agent_revoked` / `scope_changed`, 400 (`invalid_request`, `invalid_instance`) | permanent, logged at error level with `error_description`; on revocation offline slots are discarded |

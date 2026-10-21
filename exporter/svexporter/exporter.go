@@ -227,6 +227,11 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 		e.logger.Error("sv-be refuses uploads until an operator acts; holding the batch",
 			zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Duration("retry_in", heldBackoff))
 		return exporterhelper.NewThrottleRetry(err, heldBackoff)
+	case ae.local:
+		// Not an outage: no offline slot. Usually client_secret_file is
+		// missing, empty or unreadable; the batch waits until it is fixed.
+		e.logger.Error("Could not call sv-be: the request failed before leaving this host (check client_secret_file)", zap.Error(err))
+		return err
 	case ae.status == http.StatusUnauthorized && ae.code == "invalid_token":
 		// The oauth2client extension keeps its cached token until it is
 		// near expiry, so this repeats until then (about 10 minutes at most).

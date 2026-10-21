@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -428,4 +429,24 @@ func TestBatchRangeClampsOldAndFutureRecords(t *testing.T) {
 	assert.Equal(t, b.start, retry.start)
 	assert.Equal(t, b.end, retry.end)
 	assert.Equal(t, b.sha256, retry.sha256, "same key on every retry")
+}
+
+// A missing secret file is a local problem, not an sv-be outage: the batch
+// is kept, no offline slot is spent, and the log says what to fix.
+func TestMissingSecretFileIsNotAnOutage(t *testing.T) {
+	f := newFakeSV(t)
+	host := newOAuthHost(t, f, time.Minute)
+	e, logs := startExporter(t, testConfig(f, 8), host)
+	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+
+	// Force a token fetch with the file gone: a fresh extension, same config.
+	require.NoError(t, os.Remove(host.secretFile))
+	e2, logs2 := startExporter(t, testConfig(f, 0), newOAuthHostAt(t, f, host.secretFile, time.Minute))
+	e2.pool = e.pool
+	err := e2.pushLogs(context.Background(), testLogs(1))
+	require.Error(t, err)
+	assert.False(t, consumererror.IsPermanent(err))
+	assert.Equal(t, 8, e.pool.len(), "no offline slot spent")
+	assert.Equal(t, 1, logs2.FilterMessageSnippet("client_secret_file").Len())
+	assert.Zero(t, logs.FilterMessageSnippet("offline slot").Len()+logs2.FilterMessageSnippet("offline slot").Len())
 }

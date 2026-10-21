@@ -238,7 +238,8 @@ func (f *fakeSV) snapshot() (tokens, uploads, puts, objects int) {
 
 // testHost provides the oauth2client extension to the exporter.
 type testHost struct {
-	ext map[component.ID]component.Component
+	ext        map[component.ID]component.Component
+	secretFile string
 }
 
 func (h *testHost) GetExtensions() map[component.ID]component.Component { return h.ext }
@@ -250,6 +251,11 @@ var oauthID = component.MustNewID("oauth2client")
 func newOAuthHost(t *testing.T, f *fakeSV, expiryBuffer time.Duration) *testHost {
 	secretFile := filepath.Join(t.TempDir(), "secret")
 	require.NoError(t, os.WriteFile(secretFile, []byte(testSecret+"\n"), 0o600))
+	return newOAuthHostAt(t, f, secretFile, expiryBuffer)
+}
+
+// newOAuthHostAt starts the extension reading the secret from secretFile.
+func newOAuthHostAt(t *testing.T, f *fakeSV, secretFile string, expiryBuffer time.Duration) *testHost {
 	fact := oauth2clientauthextension.NewFactory()
 	cfg := fact.CreateDefaultConfig().(*oauth2clientauthextension.Config)
 	cfg.TokenURL = f.endpoint() + "/oauth/token"
@@ -261,7 +267,7 @@ func newOAuthHost(t *testing.T, f *fakeSV, expiryBuffer time.Duration) *testHost
 	require.NoError(t, err)
 	require.NoError(t, ext.Start(context.Background(), nil))
 	t.Cleanup(func() { _ = ext.Shutdown(context.Background()) })
-	return &testHost{ext: map[component.ID]component.Component{oauthID: ext}}
+	return &testHost{ext: map[component.ID]component.Component{oauthID: ext}, secretFile: secretFile}
 }
 
 func testConfig(f *fakeSV, poolSize int) *Config {
