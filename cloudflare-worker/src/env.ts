@@ -32,8 +32,11 @@ export interface Env {
 }
 
 export const DEFAULT_INSTANCE = "cf-worker";
-export const DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024;
-export const DEFAULT_MAX_DECOMPRESSED_BYTES = 32 * 1024 * 1024;
+// A request is held in memory several times over while it is parsed and
+// packed (about 8x its decompressed size), so these stay well under the
+// isolate's 128 MB.
+export const DEFAULT_MAX_BODY_BYTES = 8 * 1024 * 1024;
+export const DEFAULT_MAX_DECOMPRESSED_BYTES = 8 * 1024 * 1024;
 export const MIN_PASSWORD_LENGTH = 16;
 
 export function intVar(value: string | undefined, fallback: number): number {

@@ -230,12 +230,13 @@ describe("POST _bulk", () => {
 
 	it("caps the body as sent (413) by Content-Length and by streamed bytes", async () => {
 		const { env, queue } = makeEnv({ MAX_BODY_BYTES: "1000" });
-		const body = ndjson([{ message: "y".repeat(2000) }]);
-		const res = await handleFetch(bulkRequest(body), env);
-		expect(res.status).toBe(413);
+		// workerd sets no Content-Length on a Request built from a string, so declare it
+		// explicitly; the tiny body proves the declared length alone is refused.
+		const declared = await handleFetch(bulkRequest("{}", { headers: { "content-length": "5000" } }), env);
+		expect(declared.status).toBe(413);
 
 		// no Content-Length: a stream is counted as it arrives
-		const stream = new Blob([body]).stream();
+		const stream = new Blob([ndjson([{ message: "y".repeat(2000) }])]).stream();
 		const res2 = await handleFetch(bulkRequest(stream), env);
 		expect(res2.status).toBe(413);
 		expect(queue.calls).toHaveLength(0);

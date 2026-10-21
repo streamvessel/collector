@@ -10,6 +10,12 @@ const LEVEL_FIELDS = ["level", "severity", "log.level", "levelname", "loglevel",
 
 /** Longest line (UTF-8 bytes, without the newline) kept as is; longer messages are cut. */
 export const MAX_LINE_BYTES = 100_000;
+/** A level is a short word; anything longer is cut so it cannot crowd out the message. */
+const MAX_LEVEL_LENGTH = 32;
+/** Timestamps before this are not log times (durations, dates like 20261020), so they are ignored. */
+const EARLIEST_TS = Date.UTC(2000, 0, 1);
+/** Nor are timestamps more than a day after the record arrived. */
+const MAX_FUTURE_MS = 86_400_000;
 
 const encoder = new TextEncoder();
 
@@ -62,6 +68,7 @@ export function toLogLine(doc: Record<string, unknown>, index: string | undefine
 	const rawLevel = takeFirst(rest, LEVEL_FIELDS);
 
 	let ts = rawTs === undefined ? null : parseTimestamp(rawTs);
+	if (ts !== null && (ts < EARLIEST_TS || ts > receivedAt + MAX_FUTURE_MS)) ts = null;
 	if (ts === null) {
 		if (rawTs !== undefined) rest["timestamp_raw"] = rawTs;
 		ts = receivedAt;
@@ -73,7 +80,7 @@ export function toLogLine(doc: Record<string, unknown>, index: string | undefine
 	else message = "";
 
 	const out: Record<string, unknown> = { timestamp: new Date(ts).toISOString() };
-	if (typeof rawLevel === "string" && rawLevel !== "") out.level = rawLevel.toLowerCase();
+	if (typeof rawLevel === "string" && rawLevel !== "") out.level = rawLevel.slice(0, MAX_LEVEL_LENGTH).toLowerCase();
 	else if (typeof rawLevel === "number") out.level = String(rawLevel);
 	out.message = message;
 	if (index !== undefined) rest["opensearch.index"] = index;
@@ -93,7 +100,8 @@ export function toLogLine(doc: Record<string, unknown>, index: string | undefine
 		for (;;) {
 			slim.message = cut;
 			line = JSON.stringify(slim);
-			if (utf8Length(line) <= MAX_LINE_BYTES) break;
+			// The level is capped, so an empty message always fits; the cut === "" guard is a backstop.
+			if (utf8Length(line) <= MAX_LINE_BYTES || cut === "") break;
 			cut = truncateUtf8(cut, Math.floor(utf8Length(cut) * 0.8));
 		}
 	}

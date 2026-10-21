@@ -159,7 +159,7 @@ or **Workers Logs** in the Cloudflare dashboard).
 |---|---|---|
 | `401` from the Worker | Wrong user or password | Check the App Platform destination matches `BULK_PASSWORD` |
 | `500` "receiver is not configured" | `BULK_PASSWORD` is missing or shorter than 16 characters | Run `wrangler secret put BULK_PASSWORD` again |
-| `413` from the Worker | Request too large | Raise `MAX_BODY_BYTES` / `MAX_DECOMPRESSED_BYTES` if needed |
+| `413` from the Worker | Request larger than 8 MiB | Have the sender send smaller batches. Raising `MAX_BODY_BYTES` / `MAX_DECOMPRESSED_BYTES` risks the Worker's 128 MB memory limit |
 | `429` from the Worker | Rate limit reached | Raise the limits in `wrangler.toml` |
 | `upload_refused_permanently` with `invalid_client` | Client id or secret is wrong, deleted, or the agent was revoked | Check the agent in StreamVessel and update the secrets |
 | `upload_refused_permanently` with `agent_revoked` or `scope_changed` | The agent was revoked, or its bucket connection no longer reaches its folder | Check the agent and its connection in StreamVessel; if revoked, create a new agent and update the secrets |
@@ -180,13 +180,16 @@ own. Batches that ran out of retries are in the dead-letter queue; see
   an error (503), so the sender knows to send them again.
 - **Duplicates are possible.** After a retry, the same lines can end up in
   two files. Deduplicate when you read the logs if that matters to you.
-- **Outages are covered for about four days.** If StreamVessel or your bucket
-  is down, each batch is retried with growing delays (30 s, 1 min, 2 min, …
-  up to 1 hour), 100 times in total. After that, it moves to the dead-letter
-  queue.
+- **Outages are covered for about three days.** If StreamVessel or your
+  bucket is down, each batch is retried with growing delays (30 s, 1 min,
+  2 min, … up to 1 hour), 72 times in total. After that, it moves to the
+  dead-letter queue.
 
-To keep batches as long as possible, raise the queue's retention to 14 days
-(the maximum on the Paid plan):
+These numbers fit the queue's default retention of 4 days: a batch reaches
+the dead-letter queue before Cloudflare would delete it. To cover longer
+outages, raise both together: first the retention (up to 14 days on the
+Paid plan), then `max_retries` in `wrangler.toml` (at most 100). Every 24 extra
+retries need one more day of retention.
 
 ```sh
 npx wrangler queues update sv-logs --message-retention-period-secs 1209600
@@ -237,11 +240,11 @@ Change these in `wrangler.toml` (variables) or with `wrangler secret put`
 | `BULK_PASSWORD` | secret | — | Password App Platform uses; at least 16 characters |
 | `BULK_USER` | variable | `streamvessel` | User App Platform uses. Remove it to accept any user name |
 | `SV_INSTANCE` | variable | `cf-worker` | Folder name for this Worker's files. Letters, digits, `.`, `_`, `-`; up to 63 characters |
-| `MAX_BODY_BYTES` | variable | 10 MiB | Largest request accepted |
-| `MAX_DECOMPRESSED_BYTES` | variable | 32 MiB | Largest request accepted after unzipping |
+| `MAX_BODY_BYTES` | variable | 8 MiB | Largest request accepted |
+| `MAX_DECOMPRESSED_BYTES` | variable | 8 MiB | Largest request accepted after unzipping |
 | `DEBUG_LOG_REQUESTS` | variable | `false` | `true` logs each request's method, path and headers (password hidden, log content never shown) |
 | `REQUEST_LIMITER` | rate limit | 1200 per minute per IP | Limit on all requests. App Platform sends from a few shared IPs, so keep it generous |
-| `AUTH_FAIL_LIMITER` | rate limit | 10 per minute per IP | Limit on wrong passwords |
+| `AUTH_FAIL_LIMITER` | rate limit | 10 per minute per IP | Answers `429` instead of `401` once an IP keeps sending wrong passwords. It cuts noise; it does not stop guessing, so the password's length is what protects you |
 
 Running more than one Worker on the same agent? Give each one its own
 `SV_INSTANCE` so their files land in separate folders.

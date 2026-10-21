@@ -15,9 +15,11 @@ SV_SERVER = "https://streamvessel.example.com"
 SV_INSTANCE = "cf-worker"
 # Basic auth user to enter in the App Platform log destination.
 BULK_USER = "streamvessel"
-# Request caps: as sent, and after gzip/deflate is removed.
-MAX_BODY_BYTES = "10485760"
-MAX_DECOMPRESSED_BYTES = "33554432"
+# Request caps: as sent, and after gzip/deflate is removed. A request is held
+# in memory several times over while it is parsed, so keep these well under
+# the Worker's 128 MB memory limit.
+MAX_BODY_BYTES = "8388608"
+MAX_DECOMPRESSED_BYTES = "8388608"
 # "true" logs every request's method, path and headers (Authorization redacted) to `wrangler tail`.
 DEBUG_LOG_REQUESTS = "false"
 
@@ -31,11 +33,13 @@ queue = "sv-logs"
 max_batch_size = 100
 max_batch_timeout = 60
 # The consumer sets its own delay on each retry: 30 s doubling to a 1 h cap, or
-# 1 h after a permanent refusal (invalid_client, agent_revoked). 100 attempts
-# therefore ride out an sv-be or bucket outage of about four days before a
-# batch moves to the dead-letter queue. retry_delay only applies if a batch
-# fails without the consumer choosing a delay (an uncaught exception).
-max_retries = 100
+# 1 h after a permanent refusal (invalid_client, agent_revoked). 72 retries
+# take at most 3 days, which ends before the queue's default 4-day retention
+# deletes a message, so a batch that keeps failing reaches the dead-letter
+# queue instead of expiring. Raise this only together with the retention.
+# retry_delay only applies if a batch fails without the consumer choosing a
+# delay (an uncaught exception).
+max_retries = 72
 retry_delay = 30
 dead_letter_queue = "sv-logs-dlq"
 
