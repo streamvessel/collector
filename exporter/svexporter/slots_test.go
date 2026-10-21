@@ -2,12 +2,15 @@ package svexporter
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/component"
+	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.uber.org/zap"
 )
 
@@ -126,4 +129,110 @@ func TestSlotPoolLeaseErrors(t *testing.T) {
 	require.Error(t, p.refill(context.Background()))
 	assert.Zero(t, p.len())
 	assert.False(t, p.needsRefill())
+}
+
+// memStorage is an in-memory storage.Client, like file_storage across a
+// restart on the same volume.
+type memStorage struct {
+	mu   sync.Mutex
+	data map[string][]byte
+}
+
+func (m *memStorage) Get(_ context.Context, k string) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.data[k], nil
+}
+
+func (m *memStorage) Set(_ context.Context, k string, v []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		m.data = map[string][]byte{}
+	}
+	m.data[k] = v
+	return nil
+}
+
+func (m *memStorage) Delete(_ context.Context, k string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.data, k)
+	return nil
+}
+
+func (m *memStorage) Batch(context.Context, ...*storage.Operation) error { return nil }
+func (m *memStorage) Close(context.Context) error                        { return nil }
+
+func TestSlotPoolSurvivesRestart(t *testing.T) {
+	f := newFakeSV(t)
+	clock := &testClock{t: time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)}
+	store := &memStorage{}
+
+	first := newTestPool(t, f, clock)
+	first.store = store
+	require.NoError(t, first.refill(context.Background()))
+	used := first.take()
+	require.NotNil(t, used)
+
+	// Restart on the same volume: the 7 unused slots are back, the used one
+	// is not, and sv-be's count of 8 is known, so no lease call is wasted.
+	clock.add(10 * time.Minute)
+	p := newTestPool(t, f, clock)
+	p.store = store
+	p.load(context.Background())
+	assert.Equal(t, 7, p.len())
+	assert.False(t, p.needsRefill())
+	for range 7 {
+		s := p.take()
+		require.NotNil(t, s)
+		assert.NotEqual(t, used.URL, s.URL, "a slot is used once, also across a restart")
+	}
+
+	// Slots within a minute of expiry are dropped on load.
+	clock.add(49*time.Minute + 30*time.Second)
+	again := newTestPool(t, f, clock)
+	again.store = store
+	again.load(context.Background())
+	assert.Zero(t, again.len())
+
+	// Another instance name does not pick up these slots.
+	other := newSlotPool(8, again.client, "web-2", zap.NewNop(), clock.now)
+	other.store = store
+	clock.add(-50 * time.Minute)
+	other.load(context.Background())
+	assert.Zero(t, other.len())
+}
+
+// memStorageExt stands in for file_storage.
+type memStorageExt struct{ client *memStorage }
+
+func (*memStorageExt) Start(context.Context, component.Host) error { return nil }
+func (*memStorageExt) Shutdown(context.Context) error              { return nil }
+func (m *memStorageExt) GetClient(context.Context, component.Kind, component.ID, string) (storage.Client, error) {
+	return m.client, nil
+}
+
+func TestExporterKeepsSlotsInQueueStorage(t *testing.T) {
+	f := newFakeSV(t)
+	storageID := component.MustNewID("file_storage")
+	ext := &memStorageExt{client: &memStorage{}}
+	host := newOAuthHost(t, f, time.Minute)
+	host.ext[storageID] = ext
+	cfg := testConfig(f, 8)
+	cfg.QueueConfig.Get().StorageID = &storageID
+
+	e, _ := startExporter(t, cfg, host)
+	require.Eventually(t, func() bool { return e.pool.len() == 8 }, 5*time.Second, 10*time.Millisecond)
+	require.NoError(t, e.shutdown(context.Background()))
+
+	restarted, logs := startExporter(t, cfg, host)
+	assert.Equal(t, 8, restarted.pool.len())
+	assert.Equal(t, 1, f.leases(), "no lease call after a restart that kept its slots")
+	for _, entry := range logs.All() {
+		for _, v := range entry.ContextMap() {
+			assert.NotContains(t, fmt.Sprint(v), "X-Amz-Signature", "slot URLs are credentials")
+		}
+		assert.NotContains(t, entry.Message, "X-Amz-Signature")
+	}
 }

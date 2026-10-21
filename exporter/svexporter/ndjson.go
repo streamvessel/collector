@@ -71,11 +71,12 @@ func encodeBatch(ld plog.Logs, fallbackHost string, now time.Time) (*batch, erro
 			for k := 0; k < lrs.Len(); k++ {
 				lr := lrs.At(k)
 				ts := recordTime(lr, now)
-				if b.records == 0 || ts.Before(b.start) {
-					b.start = ts
+				rt := rangeTime(lr, ts, now)
+				if b.records == 0 || rt.Before(b.start) {
+					b.start = rt
 				}
-				if b.records == 0 || ts.After(b.end) {
-					b.end = ts
+				if b.records == 0 || rt.After(b.end) {
+					b.end = rt
 				}
 				if err := enc.Encode(toLine(lr, ts, host)); err != nil {
 					return nil, err
@@ -102,6 +103,33 @@ func recordTime(lr plog.LogRecord, now time.Time) time.Time {
 		return ts.AsTime()
 	}
 	return now
+}
+
+const (
+	maxRecordAge  = 7 * 24 * time.Hour
+	maxRecordLead = time.Minute
+)
+
+// rangeTime is what a record contributes to the batch's startTs/endTs: its
+// time clamped to [arrival - 7 days, arrival + 1 min], arrival being when
+// the agent read it. sv-be refuses a batch for good when startTs is over 30
+// days old or endTs over 5 minutes ahead, so one stale or future-dated
+// record must not decide the range. The observed time is stored with the
+// record, so the range, and the key, stay the same on every retry. The
+// record's own timestamp in the NDJSON is left as it is.
+func rangeTime(lr plog.LogRecord, ts, now time.Time) time.Time {
+	arrival := now
+	if obs := lr.ObservedTimestamp(); obs != 0 {
+		arrival = obs.AsTime()
+	}
+	lo, hi := arrival.Add(-maxRecordAge), arrival.Add(maxRecordLead)
+	switch {
+	case ts.Before(lo):
+		return lo
+	case ts.After(hi):
+		return hi
+	}
+	return ts
 }
 
 func toLine(lr plog.LogRecord, ts time.Time, host string) line {

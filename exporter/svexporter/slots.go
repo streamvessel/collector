@@ -2,6 +2,7 @@ package svexporter // import "github.com/streamvessel/collector/exporter/svexpor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math/rand/v2"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.uber.org/zap"
 )
 
@@ -22,6 +24,8 @@ const (
 	// heldBackoff is how long to wait after a 409 (too_many_instances,
 	// connection_unreadable), which needs an operator.
 	heldBackoff = time.Hour
+	// slotsStorageKey is where the pool is kept in the file_storage client.
+	slotsStorageKey = "offline_slots"
 )
 
 // slotPool holds offline upload slots from POST /leases. sv-be counts every
@@ -29,6 +33,11 @@ const (
 // not, so the pool asks for more only when one of its slots has expired (or
 // at startup), and keeps every slot it gets. A slot is used once: take
 // removes it.
+//
+// With a storage client the pool survives restarts on the same volume:
+// otherwise a restarted agent would hold nothing while sv-be still counts
+// the slots its previous run leased. Stored slots are credentials; their
+// URLs are never logged.
 type slotPool struct {
 	size     int
 	client   *svClient
@@ -36,6 +45,7 @@ type slotPool struct {
 	logger   *zap.Logger
 	now      func() time.Time
 	jitter   func(time.Duration) time.Duration
+	store    storage.Client // nil: in memory only
 
 	mu        sync.Mutex
 	slots     []target    // usable, soonest expiry first
@@ -57,6 +67,54 @@ func newSlotPool(size int, client *svClient, instance string, logger *zap.Logger
 	}
 }
 
+// poolState is what is persisted.
+type poolState struct {
+	Instance string      `json:"instance"`
+	Slots    []target    `json:"slots"`
+	Minted   []time.Time `json:"minted"`
+}
+
+// load restores the pool saved by a previous run of the same instance,
+// dropping slots that expired or are about to.
+func (p *slotPool) load(ctx context.Context) {
+	if p.store == nil {
+		return
+	}
+	data, err := p.store.Get(ctx, slotsStorageKey)
+	if err != nil || data == nil {
+		if err != nil {
+			p.logger.Warn("Could not read saved offline slots", zap.Error(err))
+		}
+		return
+	}
+	var st poolState
+	if err := json.Unmarshal(data, &st); err != nil || st.Instance != p.instance {
+		return // another instance's slots, or unreadable: start empty
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.slots, p.minted = st.Slots, st.Minted
+	p.dropExpiredLocked()
+	slices.SortFunc(p.slots, func(a, b target) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	p.logger.Info("Restored offline upload slots", zap.Int("usable", len(p.slots)), zap.Int("outstanding", len(p.minted)))
+}
+
+// saveLocked persists the pool; p.mu must be held.
+func (p *slotPool) saveLocked() {
+	if p.store == nil {
+		return
+	}
+	data, err := json.Marshal(poolState{Instance: p.instance, Slots: p.slots, Minted: p.minted})
+	if err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err = p.store.Set(ctx, slotsStorageKey, data)
+		cancel()
+	}
+	if err != nil {
+		p.logger.Warn("Could not save offline slots", zap.Error(err))
+	}
+}
+
 // take removes and returns the slot that expires soonest but still has
 // minSlotLife left.
 func (p *slotPool) take() *target {
@@ -68,6 +126,7 @@ func (p *slotPool) take() *target {
 	}
 	t := p.slots[0]
 	p.slots = p.slots[1:]
+	p.saveLocked() // a slot is used once, also across a restart
 	return &t
 }
 
@@ -85,6 +144,7 @@ func (p *slotPool) clear() {
 	defer p.mu.Unlock()
 	p.slots = nil
 	p.stopped = true
+	p.saveLocked()
 }
 
 func (p *slotPool) dropExpiredLocked() {
@@ -138,6 +198,7 @@ func (p *slotPool) refill(ctx context.Context) error {
 		p.slots = append(p.slots, t)
 	}
 	slices.SortFunc(p.slots, func(a, b target) int { return a.ExpiresAt.Compare(b.ExpiresAt) })
+	p.saveLocked()
 	p.notBefore = time.Time{}
 	if len(resp.Slots) == 0 {
 		// sv-be counts slots we do not hold (minted before a restart, or by

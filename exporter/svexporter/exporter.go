@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/collector/consumer/consumererror"
 	"go.opentelemetry.io/collector/exporter"
 	"go.opentelemetry.io/collector/exporter/exporterhelper"
+	"go.opentelemetry.io/collector/extension/xextension/storage"
 	"go.opentelemetry.io/collector/pdata/plog"
 	"go.uber.org/zap"
 )
@@ -120,6 +121,18 @@ func (e *svExporter) start(ctx context.Context, host component.Host) error {
 	e.logger.Info("StreamVessel exporter started", zap.String("instance", e.instance))
 	if e.cfg.OfflineSlots.PoolSize > 0 {
 		e.pool = newSlotPool(e.cfg.OfflineSlots.PoolSize, e.sv, e.instance, e.logger, e.now)
+		// Keep the slots in the queue's file_storage, so a restart on the
+		// same volume keeps them.
+		if q := e.cfg.QueueConfig.Get(); q != nil && q.StorageID != nil {
+			if se, ok := host.GetExtensions()[*q.StorageID].(storage.Extension); ok {
+				client, err := se.GetClient(ctx, component.KindExporter, e.set.ID, slotsStorageKey)
+				if err != nil {
+					return fmt.Errorf("offline slot storage: %w", err)
+				}
+				e.pool.store = client
+			}
+		}
+		e.pool.load(ctx)
 		pctx, cancel := context.WithCancel(context.Background())
 		e.stopPool = cancel
 		e.poolDone.Add(1)
@@ -131,10 +144,13 @@ func (e *svExporter) start(ctx context.Context, host component.Host) error {
 	return nil
 }
 
-func (e *svExporter) shutdown(context.Context) error {
+func (e *svExporter) shutdown(ctx context.Context) error {
 	if e.stopPool != nil {
 		e.stopPool()
 		e.poolDone.Wait()
+	}
+	if e.pool != nil && e.pool.store != nil {
+		return e.pool.store.Close(ctx)
 	}
 	return nil
 }
@@ -200,7 +216,7 @@ func (e *svExporter) presignFailed(ctx context.Context, b *batch, err error) err
 			e.logger.Error("sv-be refused this agent's client credentials (invalid_client): the agent was revoked or its secret deleted. Uploads stop; dropping the batch. Fix the secret file or create a new agent.",
 				zap.Int("records", b.records), zap.Error(err))
 		} else {
-			e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
+			e.logger.Error("sv-be refused the upload permanently; dropping the batch", zap.String("reason", ae.code), zap.String("description", ae.desc), zap.Int("status", ae.status), zap.Int("records", b.records), zap.Error(err))
 		}
 		return consumererror.NewPermanent(err)
 	}

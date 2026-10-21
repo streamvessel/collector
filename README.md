@@ -37,7 +37,9 @@ Authentication is the stock `oauth2client` extension (client credentials grant a
 {"timestamp":"2026-10-20T12:00:00.123456Z","level":"warn","status":404,"message":"GET /a HTTP/1.1 …","host":"web-1","file":"/var/log/nginx/access.log","attrs":{"method":"GET"}}
 ```
 
-`timestamp` is RFC 3339 UTC with at most 6 fractional digits (the parsed time, else the observed time); `level` comes from the severity; `status` appears when a parser extracted one; `attrs` holds the remaining attributes.
+`timestamp` is RFC 3339 UTC with at most 6 fractional digits (the parsed time, else the observed time), never altered; `level` comes from the severity; `status` appears when a parser extracted one; `attrs` holds the remaining attributes.
+
+The batch's `startTs`/`endTs` (which name the object) come from the records' times, each clamped to [read time − 7 days, read time + 1 min]. sv-be refuses a batch for good when `startTs` is over 30 days old or `endTs` over 5 minutes ahead, so one stale line (a re-read rotated file) or one from a host with a bad clock cannot get the batch dropped. The read time is stored with the record, so a retried batch gets the same key.
 
 ### Responses
 
@@ -45,14 +47,15 @@ Authentication is the stock `oauth2client` extension (client credentials grant a
 |---|---|
 | token request `invalid_client` | permanent: logged loudly, batch dropped, no retry loop |
 | 401 `invalid_token` | logged and retried; succeeds once the extension has a new token (it keeps its cached token until near expiry, so up to about 10 minutes) |
-| 403 `agent_revoked` / `scope_changed`, 400 | permanent, logged with the reason; offline slots are discarded |
+| 403 `agent_revoked` / `scope_changed`, 400 (`invalid_request`, `invalid_instance`) | permanent, logged at error level with `error_description`; on revocation offline slots are discarded |
+| 404 `not_found` | ingest is disabled on sv-be: backoff, the batch is kept |
 | 409 `too_many_instances` / `connection_unreadable` | logged at error level with `error_description`; the batch is kept and retried after an hour |
 | 429 / 5xx (incl. 502 `storage_unavailable`) / no answer | backoff (honours `Retry-After`); uploads to an offline slot if one is held |
 | 412 on PUT | already stored (the key carries the hash): success |
 | 403 on PUT | up to 3 fresh URLs per attempt, then logged as a signing or clock problem and backed off |
 | 400 / 409 / 501 on PUT | provider code logged; 3 retries with backoff, then the batch is held (`hold_interval`, 15 min) until an operator fixes it |
 
-Offline slots: the exporter keeps up to 8 pre-minted upload slots from `POST /be/ingest/leases`, each used once. sv-be counts every slot it minted against that cap until the slot expires, used or not, so the agent asks for more only at startup or once one of its slots has expired, and keeps every slot it gets. After an empty answer (sv-be still counts slots from before a restart) it waits 10–15 minutes; a 429 on leases (6 per minute per agent, shared by its instances) is retried after `Retry-After` plus jitter. `offline_slots.pool_size: 0` turns them off.
+Offline slots: the exporter keeps up to 8 pre-minted upload slots from `POST /be/ingest/leases`, each used once. sv-be counts every slot it minted against that cap until the slot expires, used or not, so the agent asks for more only at startup or once one of its slots has expired, and keeps every slot it gets. The pool is saved in the queue's `file_storage`, so a restart on the same volume keeps its slots; without a volume a restarted agent has none until the old ones expire (up to an hour), and the persistent queue still covers an outage. Saved slots are credentials and their URLs are never logged. After an empty answer (sv-be still counts slots from before a restart) it waits 10–15 minutes; a 429 on leases (6 per minute per agent, shared by its instances) is retried after `Retry-After` plus jitter. `offline_slots.pool_size: 0` turns them off.
 
 A wrong or deleted secret: the oauth2client extension auto-detects how to send the client credentials, so each failed token exchange is two requests. sv-be limits failures to 10 per 5 minutes per client id and source IP, so a bad secret is rate-limited after 5 attempts; fix the secret file and the next attempt after the limit window succeeds.
 

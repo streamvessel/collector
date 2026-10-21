@@ -207,6 +207,7 @@ func TestUploadsResponseTable(t *testing.T) {
 		{"agent revoked", 403, map[string]string{"error": "agent_revoked", "error_description": "agent was revoked"}, true},
 		{"scope changed", 403, map[string]string{"error": "scope_changed"}, true},
 		{"bad request", 400, map[string]string{"error": "invalid_instance"}, true},
+		{"invalid request (time range)", 400, map[string]string{"error": "invalid_request", "error_description": "startTs is more than 30 days old"}, true},
 		{"rate limited", 429, map[string]string{"error": "rate_limited"}, false},
 		{"server error", 503, nil, false},
 		{"unknown 403", 403, map[string]string{"error": "something_else"}, false},
@@ -393,4 +394,38 @@ func TestInvalidTokenIsLogged(t *testing.T) {
 	e, logs := startExporter(t, testConfig(f, 0), newOAuthHost(t, f, time.Minute))
 	require.Error(t, e.pushLogs(context.Background(), testLogs(1)))
 	assert.Equal(t, 1, logs.FilterMessageSnippet("rejected the access token").Len())
+}
+
+// One stale and one future-dated record must not get the batch refused:
+// only the batch's range is clamped, the records keep their own times, and
+// the range is the same when the batch is encoded again on a retry.
+func TestBatchRangeClampsOldAndFutureRecords(t *testing.T) {
+	arrival := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	ld := plog.NewLogs()
+	lrs := ld.ResourceLogs().AppendEmpty().ScopeLogs().AppendEmpty().LogRecords()
+	add := func(ts time.Time) {
+		lr := lrs.AppendEmpty()
+		lr.SetTimestamp(pcommon.NewTimestampFromTime(ts))
+		lr.SetObservedTimestamp(pcommon.NewTimestampFromTime(arrival))
+		lr.Body().SetStr("x")
+	}
+	old := arrival.Add(-40 * 24 * time.Hour) // re-read rotated file
+	future := arrival.Add(3 * time.Hour)     // host with a bad clock
+	add(old)
+	add(arrival.Add(-time.Minute))
+	add(future)
+
+	b, err := encodeBatch(ld, "h", arrival.Add(time.Minute))
+	require.NoError(t, err)
+	assert.Equal(t, arrival.Add(-7*24*time.Hour), b.start)
+	assert.Equal(t, arrival.Add(time.Minute), b.end)
+	lines := gunzipLines(t, b.body)
+	assert.Equal(t, formatTime(old), lines[0]["timestamp"])
+	assert.Equal(t, formatTime(future), lines[2]["timestamp"])
+
+	retry, err := encodeBatch(ld, "h", arrival.Add(6*time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, b.start, retry.start)
+	assert.Equal(t, b.end, retry.end)
+	assert.Equal(t, b.sha256, retry.sha256, "same key on every retry")
 }

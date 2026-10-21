@@ -4,13 +4,13 @@
 #   1. start MiniStack, fake sv-be and the agent; start writing N lines
 #   2. stop sv-be; the agent uploads to offline slots; start sv-be again
 #   3. SIGKILL the agent mid-batch, start it again on the same state volume
-#      (after the outage: a restarted agent holds no slots until the ones its
-#      previous run leased expire, because sv-be still counts them)
-#   4. wait until every line 1..N is in the bucket (duplicates allowed)
+#   4. stop sv-be again: the restarted agent must still have offline slots,
+#      restored from file_storage (sv-be would not mint it new ones)
+#   5. wait until every line 1..N is in the bucket (duplicates allowed)
 set -euo pipefail
 cd "$(dirname "$0")"
 
-N=${N:-16000}
+N=${N:-20000}
 RATE=${RATE:-400}
 DEADLINE=${DEADLINE:-180}
 dc() { docker compose "$@"; }
@@ -41,7 +41,14 @@ echo "--- killing the agent mid-batch"
 docker inspect sv-e2e-gen >/dev/null 2>&1 || fail "generator already finished: the kill would not be mid-batch"
 dc kill -s SIGKILL agent
 sleep 3
+restarted=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 dc start agent
+
+sleep 5
+echo "--- stopping sv-be again; the restarted agent should use its saved slots"
+dc kill fakesvbe
+sleep 12
+dc start fakesvbe
 
 echo "--- waiting for the generator"
 while docker inspect sv-e2e-gen >/dev/null 2>&1; do sleep 1; done
@@ -53,5 +60,10 @@ until dc --profile tools run --rm verify -n "$N" -want-lease; do
   sleep 5
 done
 
-dc logs --no-color agent | grep -q "uploading to an offline slot" || fail "agent never used an offline slot"
-echo "PASS: all $N lines delivered across a SIGKILL and an sv-be outage"
+# Capture first: grep -q closing a pipe early would trip pipefail.
+all=$(dc logs --no-color agent)
+grep -q "uploading to an offline slot" <<<"$all" || fail "agent never used an offline slot"
+after=$(dc logs --no-color --since "$restarted" agent)
+grep -q "Restored offline upload slots" <<<"$after" || fail "restarted agent did not restore its slots"
+grep -q "uploading to an offline slot" <<<"$after" || fail "restarted agent did not use a saved slot"
+echo "PASS: all $N lines delivered across two sv-be outages and a SIGKILL in between"
