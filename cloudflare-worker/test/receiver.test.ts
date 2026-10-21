@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_BATCH_BYTES, MAX_BATCH_MESSAGES, MAX_MESSAGE_BYTES, type QueueBody } from "../src/batching";
 import { gzip } from "../src/consumer";
 import type { Env } from "../src/env";
@@ -30,8 +30,8 @@ function makeEnv(overrides: Partial<Env> = {}): { env: Env; queue: FakeQueue } {
 			SV_SERVER: "https://sv.test",
 			SV_CLIENT_ID: "sva_ReceiverTest-012345678",
 			SV_CLIENT_SECRET: "svas_x",
-			BULK_USER: "streamvessel",
-			BULK_PASSWORD: PASSWORD,
+			COLLECTOR_USER: "streamvessel",
+			COLLECTOR_PASSWORD: PASSWORD,
 			...overrides,
 		},
 	};
@@ -69,8 +69,8 @@ describe("authentication", () => {
 		expect(wrongUser.status).toBe(401);
 	});
 
-	it("accepts any user when BULK_USER is unset", async () => {
-		const { env } = makeEnv({ BULK_USER: undefined });
+	it("accepts any user when COLLECTOR_USER is unset", async () => {
+		const { env } = makeEnv({ COLLECTOR_USER: undefined });
 		const res = await handleFetch(new Request("https://worker.test/", { headers: { authorization: basic("whoever", PASSWORD) } }), env);
 		expect(res.status).toBe(200);
 	});
@@ -85,9 +85,9 @@ describe("authentication", () => {
 		spy.mockRestore();
 	});
 
-	it("fails closed when BULK_PASSWORD is unset or short", async () => {
-		for (const pw of ["", "short"]) {
-			const { env } = makeEnv({ BULK_PASSWORD: pw });
+	it("fails closed when COLLECTOR_PASSWORD is unset, short or a placeholder", async () => {
+		for (const pw of ["", "short", "REPLACE_ME", "REPLACE_ME-padded-to-be-long-enough", "change-me-to-a-long-random-value"]) {
+			const { env } = makeEnv({ COLLECTOR_PASSWORD: pw });
 			const res = await handleFetch(new Request("https://worker.test/", { headers: { authorization: basic("streamvessel", pw) } }), env);
 			expect(res.status).toBe(500);
 		}
@@ -112,6 +112,67 @@ describe("authentication", () => {
 		const res2 = await handleFetch(new Request("https://worker.test/", { headers }), all.env);
 		expect(res2.status).toBe(429);
 		expect(res2.headers.get("retry-after")).toBe("10");
+	});
+});
+
+type CheckBody = { ok: boolean; checks: Array<{ name: string; ok: boolean; detail: string }> };
+
+describe("GET /_check", () => {
+	const auth = { authorization: basic("streamvessel", PASSWORD) };
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("reports ok after getting a token from StreamVessel", async () => {
+		const tokenRequests: string[] = [];
+		vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+			tokenRequests.push(new Request(input).url);
+			return Response.json({ access_token: "svla_x", token_type: "Bearer", expires_in: 900 });
+		});
+		const { env } = makeEnv();
+		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
+		const body = (await res.json()) as CheckBody;
+		expect(res.status).toBe(200);
+		expect(body.ok).toBe(true);
+		expect(body.checks.map((c) => c.name)).toEqual(["queue", "settings", "streamvessel"]);
+		expect(tokenRequests).toEqual(["https://sv.test/be/ingest/oauth/token"]);
+	});
+
+	it("names invalid_client with a hint", async () => {
+		vi.stubGlobal("fetch", async () => Response.json({ error: "invalid_client" }, { status: 401 }));
+		const { env } = makeEnv();
+		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
+		const body = (await res.json()) as CheckBody;
+		expect(res.status).toBe(503);
+		const sv = body.checks.find((c) => c.name === "streamvessel")!;
+		expect(sv.ok).toBe(false);
+		expect(sv.detail).toContain("invalid_client");
+		expect(sv.detail).toContain("SV_CLIENT_SECRET");
+	});
+
+	it("reports bad settings without calling StreamVessel", async () => {
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		const { env } = makeEnv({ SV_CLIENT_ID: "", SV_CLIENT_SECRET: "" });
+		const res = await handleFetch(new Request("https://worker.test/_check", { headers: auth }), env);
+		const body = (await res.json()) as CheckBody;
+		expect(res.status).toBe(503);
+		expect(body.checks.find((c) => c.name === "settings")!.detail).toContain("SV_CLIENT_ID is not set");
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("is not served while COLLECTOR_PASSWORD is unusable, and asks StreamVessel nothing", async () => {
+		const fetchSpy = vi.fn();
+		vi.stubGlobal("fetch", fetchSpy);
+		for (const pw of ["", "REPLACE_ME", " ".repeat(20)]) {
+			const { env } = makeEnv({ COLLECTOR_PASSWORD: pw });
+			const res = await handleFetch(new Request("https://worker.test/_check", { headers: { authorization: basic("streamvessel", pw) } }), env);
+			expect(res.status, JSON.stringify(pw)).toBe(500);
+		}
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("needs the password like every other route", async () => {
+		const { env } = makeEnv();
+		expect((await handleFetch(new Request("https://worker.test/_check"), env)).status).toBe(401);
 	});
 });
 

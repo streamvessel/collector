@@ -1,21 +1,21 @@
 # StreamVessel log agent as a Cloudflare Worker. Deploy with the "Deploy to
-# Cloudflare" button in README.md, or by hand after setting the three secrets
-# listed in .dev.vars.example:
-#   wrangler secret put SV_CLIENT_ID
+# Cloudflare" button in README.md, or by hand: set SV_CLIENT_ID below, then the
+# two secrets listed in .dev.vars.example:
 #   wrangler secret put SV_CLIENT_SECRET
-#   wrangler secret put BULK_PASSWORD
+#   wrangler secret put COLLECTOR_PASSWORD
 name = "streamvessel-log-worker"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
 [vars]
+SV_CLIENT_ID = ""  # Required: your log agent's client id from StreamVessel (sva_ + 22 characters). Public, so not a secret.
 # StreamVessel origin; the Worker calls {SV_SERVER}/be/ingest/oauth/token and /be/ingest/uploads.
 SV_SERVER = "https://app.streamvessel.com"
 # Folder name for this Worker's files under the agent's prefix: [A-Za-z0-9._-]{1,63}.
 SV_INSTANCE = "cf-worker"
-# Basic auth user to enter in the App Platform log destination.
-BULK_USER = "streamvessel"
+# User name App Platform sends with COLLECTOR_PASSWORD (Basic auth).
+COLLECTOR_USER = "streamvessel"
 # Request caps: as sent, and after gzip/deflate is removed. A request is held
 # in memory several times over while it is parsed, so keep these well under
 # the Worker's 128 MB memory limit.

@@ -10,7 +10,7 @@ export default defineConfig({
 					SV_SERVER: "https://sv.test",
 					SV_CLIENT_ID: "sva_TestClient-0123456789_",
 					SV_CLIENT_SECRET: "svas_testsecret",
-					BULK_PASSWORD: "correct-horse-battery-staple",
+					COLLECTOR_PASSWORD: "correct-horse-battery-staple",
 				},
 			},
 		}),

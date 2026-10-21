@@ -7,7 +7,7 @@ import { resetTokenCache } from "../src/svclient";
 import { FakeSvBe, gunzipText } from "./fake-svbe";
 
 let sv: FakeSvBe;
-let errorLog: { mock: { calls: unknown[][] } };
+let errorLog: { mock: { calls: unknown[][] }; mockClear(): void };
 
 function testEnv(overrides: Partial<Env> = {}): Env {
 	return {
@@ -16,7 +16,7 @@ function testEnv(overrides: Partial<Env> = {}): Env {
 		SV_CLIENT_ID: sv.clientId,
 		SV_CLIENT_SECRET: sv.clientSecret,
 		SV_INSTANCE: "cf-test",
-		BULK_PASSWORD: "unused-in-consumer-tests",
+		COLLECTOR_PASSWORD: "unused-in-consumer-tests",
 		...overrides,
 	};
 }
@@ -248,14 +248,6 @@ describe("queue consumer", () => {
 		expect(t.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 30 }]);
 	});
 
-	it("refuses a client id that cannot be one, as sv-be does (invalid_client, permanent)", async () => {
-		// Id and secret match the fake's records, so only the shape check can refuse it.
-		sv.clientId = "sva_short";
-		const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv({ SV_CLIENT_ID: "sva_short" }));
-		expect(r.retryMessages).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
-		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("invalid_client"));
-	});
-
 	it("treats 403 agent_revoked from uploads as permanent", async () => {
 		sv.onUpload = () => Response.json({ error: "agent_revoked" }, { status: 403 });
 		const r = await run([line("2026-10-20T12:00:00.000Z", "x")]);
@@ -264,6 +256,24 @@ describe("queue consumer", () => {
 		expect(errorLog).toHaveBeenCalledWith(expect.stringContaining("agent_revoked"));
 		await run([line("2026-10-20T12:00:00.000Z", "y")]);
 		expect(sv.uploadCalls).toHaveLength(1);
+	});
+
+	it("refuses missing, placeholder or malformed credentials without calling sv-be", async () => {
+		const cases: Array<[Partial<Env>, string]> = [
+			[{ SV_CLIENT_ID: "" }, "SV_CLIENT_ID is not set"],
+			[{ SV_CLIENT_ID: "REPLACE_ME" }, "SV_CLIENT_ID is not a StreamVessel client id"],
+			[{ SV_CLIENT_ID: "sva_short" }, "SV_CLIENT_ID is not a StreamVessel client id"],
+			[{ SV_CLIENT_SECRET: "" }, "SV_CLIENT_SECRET is not set"],
+			[{ SV_CLIENT_SECRET: "REPLACE_ME" }, "SV_CLIENT_SECRET is not a StreamVessel secret"],
+		];
+		for (const [overrides, message] of cases) {
+			resetConsumerState();
+			errorLog.mockClear();
+			const r = await run([line("2026-10-20T12:00:00.000Z", "x")], testEnv(overrides));
+			expect(r.retryMessages, message).toEqual([{ msgId: "m0", delaySeconds: 3600 }]);
+			expect(errorLog).toHaveBeenCalledWith(expect.stringContaining(message));
+		}
+		expect(sv.tokenCalls).toHaveLength(0);
 	});
 
 	it("treats a bad SV_INSTANCE as permanent configuration error", async () => {

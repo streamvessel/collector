@@ -21,22 +21,22 @@
   "cloudflare": {
     "bindings": {
       "SV_CLIENT_ID": {
-        "description": "Client id of your StreamVessel log agent (`sva_…`). Create the agent in StreamVessel first."
+        "description": "**Required.** Client id of your StreamVessel log agent: `sva_` followed by 22 characters. Create the agent in StreamVessel first."
       },
       "SV_CLIENT_SECRET": {
-        "description": "Secret of that log agent (`svas_…`). StreamVessel shows it only once."
+        "description": "**Required.** Secret of that log agent: starts with `svas_`. StreamVessel shows it only once, when you create the agent."
       },
-      "BULK_PASSWORD": {
-        "description": "A new password that App Platform will use to send logs here. At least 16 characters; for example the output of `openssl rand -base64 32`. You need it again when you set up log forwarding."
+      "COLLECTOR_PASSWORD": {
+        "description": "**Required.** A new password App Platform will use to send logs to this Worker. At least 16 characters, for example the output of `openssl rand -base64 32`. Keep it: you enter it again in App Platform."
+      },
+      "COLLECTOR_USER": {
+        "description": "User name App Platform will use with `COLLECTOR_PASSWORD`. Default: `streamvessel`."
       },
       "SV_SERVER": {
         "description": "Your StreamVessel address. Keep the default unless you run your own StreamVessel."
       },
       "SV_INSTANCE": {
-        "description": "Folder name for this Worker's files in your bucket. Letters, digits, `.`, `_` and `-`."
-      },
-      "BULK_USER": {
-        "description": "User name App Platform will use to send logs here."
+        "description": "Folder name for this Worker's files in your bucket: letters, digits, `.`, `_` and `-`, up to 63 characters."
       },
       "LOG_QUEUE": {
         "description": "Queue that holds logs until they are uploaded."

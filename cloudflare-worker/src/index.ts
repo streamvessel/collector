@@ -2,12 +2,13 @@ import { checkBasicAuth } from "./auth";
 import { enqueueLines } from "./batching";
 import { readBody } from "./body";
 import { bulkResponse, parseBulk } from "./bulk";
+import { handleCheck } from "./check";
 import { handleQueue } from "./consumer";
 import {
 	DEFAULT_MAX_BODY_BYTES,
 	DEFAULT_MAX_DECOMPRESSED_BYTES,
 	intVar,
-	MIN_PASSWORD_LENGTH,
+	passwordProblem,
 	type Env,
 } from "./env";
 import { log } from "./log";
@@ -71,12 +72,13 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 	if (await limited(env.REQUEST_LIMITER, ip)) {
 		return errorResponse(429, "es_rejected_execution_exception", "rate limit exceeded", { "retry-after": "10" });
 	}
-	if (!env.BULK_PASSWORD || env.BULK_PASSWORD.length < MIN_PASSWORD_LENGTH) {
-		// Fail closed: never run open, or behind a guessable password.
-		log("error", "misconfigured", { error: `BULK_PASSWORD must be at least ${MIN_PASSWORD_LENGTH} characters` });
-		return errorResponse(500, "exception", "receiver is not configured");
+	const problem = passwordProblem(env);
+	if (problem) {
+		// Fail closed: never run open, or behind a guessable or published placeholder password.
+		log("error", "misconfigured", { error: problem });
+		return errorResponse(500, "exception", `receiver is not configured: ${problem}`);
 	}
-	if (!(await checkBasicAuth(request.headers.get("authorization"), env.BULK_USER, env.BULK_PASSWORD))) {
+	if (!(await checkBasicAuth(request.headers.get("authorization"), env.COLLECTOR_USER, env.COLLECTOR_PASSWORD))) {
 		if (await limited(env.AUTH_FAIL_LIMITER, ip)) {
 			return errorResponse(429, "es_rejected_execution_exception", "too many failed authentication attempts", {
 				"retry-after": "60",
@@ -89,6 +91,7 @@ export async function handleFetch(request: Request, env: Env): Promise<Response>
 	if (pathname === "/" && (request.method === "GET" || request.method === "HEAD")) {
 		return request.method === "HEAD" ? new Response(null, { status: 200 }) : json(versionDocument());
 	}
+	if (pathname === "/_check" && request.method === "GET") return handleCheck(env);
 	const bulk = BULK_PATH_RE.exec(pathname);
 	if (bulk) {
 		if (request.method !== "POST" && request.method !== "PUT") {
